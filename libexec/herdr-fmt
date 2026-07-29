@@ -1,0 +1,58 @@
+#!/bin/bash
+# herdr-fmt — format one file with the RIGHT prettier, for SpiceEdit's format-on-save.
+#
+#   herdr-fmt <file>
+#
+# WHY THIS EXISTS. SpiceEdit's format.json takes a single argv array per extension and passes it
+# straight to execve — no shell, no PATH search fallback, no "try this else that". That leaves two
+# bad options on this machine:
+#
+#   ["./node_modules/.bin/prettier", ...]  works only in repos that vendor prettier (3 of ~50 here)
+#   ["prettier", ...]                      never resolves: SpiceEdit runs as a herdr plugin pane, so
+#                                          it inherits launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin)
+#                                          and the global prettier lives under ~/.nvm
+#
+# So format.json points at this wrapper (by absolute path) and the resolution happens here:
+#
+#   1. the repo's own node_modules/.bin/prettier, walking UP from the file — a repo's pinned
+#      version and its .prettierrc win, and it works in a monorepo package too
+#   2. the global prettier under ~/.nvm — globbed, never version-pinned, so an nvm upgrade or a
+#      `nvm use` cannot silently break formatting
+#
+# Exits 0 doing nothing when no prettier is found or the file type is unsupported: SpiceEdit saves
+# the file to disk BEFORE formatting, so a no-op here can never lose your work.
+set -uo pipefail
+
+file="${1:-}"
+[ -n "$file" ] && [ -f "$file" ] || exit 0
+
+# Run prettier, but treat "this file type isn't mine" as success. A real failure (a syntax error in
+# the file) still surfaces, because that flash in SpiceEdit's status bar is genuinely useful.
+run() {
+  local err rc
+  err="$("$1" --write --log-level warn "$file" 2>&1)"; rc=$?
+  [ $rc -eq 0 ] && exit 0
+  case "$err" in
+    *"No parser could be inferred"*) exit 0 ;;
+  esac
+  printf '%s\n' "$err" >&2
+  exit $rc
+}
+
+# 1. Nearest vendored prettier, walking up from the file's directory to /.
+dir="$(cd "$(/usr/bin/dirname "$file")" && pwd)"
+while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+  if [ -x "$dir/node_modules/.bin/prettier" ]; then
+    run "$dir/node_modules/.bin/prettier"
+  fi
+  dir="$(/usr/bin/dirname "$dir")"
+done
+
+# 2. Global prettier from nvm. Newest version last in the glob, so take the last match.
+global=""
+for c in "$HOME"/.nvm/versions/node/*/bin/prettier; do
+  [ -x "$c" ] && global="$c"
+done
+[ -n "$global" ] || exit 0
+
+run "$global"

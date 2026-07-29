@@ -1,0 +1,571 @@
+#!/usr/bin/env python3
+"""herdr-tools — make herdr behave like a tiny VS Code.
+
+    herdr-tools install [--dry-run] [--no-deps] [--projects-root DIR]
+    herdr-tools uninstall [--purge]
+    herdr-tools doctor
+    herdr-tools version
+
+Stdlib only, and deliberately targets Python 3.9 — that is what ships on macOS, so there is no
+tomllib here. Config edits are marker-delimited text injections rather than TOML round-trips, which
+also means a user's own keys, comments, and settings survive install AND uninstall untouched.
+
+See SPEC.md for why each step is the way it is; every non-obvious choice is a silent failure this
+avoids (launchd PATH, event-vs-focus races, disallowUnknownFields, ...).
+"""
+
+import argparse
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+VERSION = "0.1.0"
+
+HOME = os.path.expanduser("~")
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+PLUGIN_ID = "herdr-tools"
+HERDR_CFG_DIR = os.path.join(HOME, ".config", "herdr")
+HERDR_CFG = os.path.join(HERDR_CFG_DIR, "config.toml")
+PLUGIN_DST = os.path.join(HERDR_CFG_DIR, "plugins", "local", PLUGIN_ID)
+SPICE_CFG_DIR = os.path.join(HOME, ".config", "spiceedit")
+BIN_DIR = os.path.join(HOME, ".local", "bin")
+
+BEGIN = "# >>> herdr-tools (managed) >>>"
+END = "# <<< herdr-tools (managed) <<<"
+
+# Panels: (keybinding, action id, human description)
+KEYS = [
+    ("prefix+e", "open-editor", "editor panel, left of the current pane"),
+    ("prefix+shift+e", "open-editor-tab", "editor full-width in its own tab"),
+    ("prefix+g", "open-git", "lazygit source-control panel, below the current pane"),
+]
+
+# ---------------------------------------------------------------------------------------------
+# output helpers
+# ---------------------------------------------------------------------------------------------
+
+_TTY = sys.stdout.isatty()
+
+
+def _c(code, s):
+    return "\033[%sm%s\033[0m" % (code, s) if _TTY else s
+
+
+def ok(m):
+    print("  %s %s" % (_c("32", "OK  "), m))
+
+
+def warn(m):
+    print("  %s %s" % (_c("33", "WARN"), m))
+
+
+def bad(m):
+    print("  %s %s" % (_c("31", "FAIL"), m))
+
+
+def act(m):
+    print("  %s %s" % (_c("36", "->  "), m))
+
+
+def head(m):
+    print("\n%s" % _c("1", m))
+
+
+def die(m):
+    print("%s %s" % (_c("31", "error:"), m), file=sys.stderr)
+    raise SystemExit(1)
+
+
+def run(cmd, check=False):
+    """Run a command, returning (rc, stdout+stderr). Never raises unless check."""
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        out = p.stdout.decode("utf-8", "replace")
+        if check and p.returncode != 0:
+            die("command failed: %s\n%s" % (" ".join(cmd), out))
+        return p.returncode, out
+    except FileNotFoundError:
+        return 127, ""
+
+
+# ---------------------------------------------------------------------------------------------
+# discovery
+# ---------------------------------------------------------------------------------------------
+
+
+def which(name):
+    """Absolute path for a binary, searching PATH plus the usual Homebrew prefixes.
+
+    Explicitly checks brew prefixes because the herdr SERVER runs under launchd's minimal PATH; we
+    must record an absolute path in the manifest, and the installing shell's PATH is not a reliable
+    guide to what exists on the machine.
+
+    Deliberately does NOT resolve symlinks: Homebrew's /opt/homebrew/bin/<name> is a stable
+    symlink into a versioned Cellar path, and brew re-points it on upgrade. Recording the resolved
+    target instead would pin the manifest to e.g. spice-edit/0.0.43 and break every pane command
+    the next time the user runs `brew upgrade`.
+    """
+    p = shutil.which(name)
+    if p:
+        return p if os.path.isabs(p) else os.path.abspath(p)
+    for pre in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"):
+        cand = os.path.join(pre, name)
+        if os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def herdr_bin():
+    return which("herdr")
+
+
+def herdr_version():
+    h = herdr_bin()
+    if not h:
+        return None
+    rc, out = run([h, "--version"])
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", out)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def nerd_font_installed():
+    for d in (os.path.join(HOME, "Library", "Fonts"), "/Library/Fonts",
+              os.path.join(HOME, ".local", "share", "fonts"), "/usr/share/fonts"):
+        if not os.path.isdir(d):
+            continue
+        for root, _dirs, files in os.walk(d):
+            for f in files:
+                if "nerd" in f.lower() and f.lower().endswith((".ttf", ".otf")):
+                    return os.path.join(root, f)
+    return None
+
+
+def plugin_registered():
+    h = herdr_bin()
+    if not h:
+        return False
+    rc, out = run([h, "plugin", "list"])
+    return rc == 0 and PLUGIN_ID in out
+
+
+# ---------------------------------------------------------------------------------------------
+# rendering
+# ---------------------------------------------------------------------------------------------
+
+
+def render_plugin(dry, projects_root):
+    """Write the plugin manifest + launcher, substituting absolute binary paths.
+
+    The manifest is a template precisely because pane commands must be absolute (launchd PATH) and
+    the correct absolute path differs per machine: /opt/homebrew on Apple Silicon, /usr/local on
+    Intel, /usr/bin on Linux.
+    """
+    spice = which("spiceedit")
+    lazy = which("lazygit")
+    missing = [n for n, p in (("spiceedit", spice), ("lazygit", lazy)) if not p]
+    if missing:
+        die("cannot render plugin, missing: %s (run `herdr-tools install` without --no-deps)"
+            % ", ".join(missing))
+
+    src_manifest = os.path.join(REPO, "plugin", "herdr-plugin.toml")
+    src_launcher = os.path.join(REPO, "plugin", "open-panel.sh")
+    for f in (src_manifest, src_launcher):
+        if not os.path.isfile(f):
+            die("package file missing: %s" % f)
+
+    manifest = open(src_manifest).read()
+    manifest = manifest.replace("@@SPICEEDIT@@", spice).replace("@@LAZYGIT@@", lazy)
+    launcher = open(src_launcher).read().replace("@@PROJECTS_ROOT@@", projects_root)
+
+    if dry:
+        act("would write %s (spiceedit=%s, lazygit=%s)" % (PLUGIN_DST, spice, lazy))
+        return False
+
+    os.makedirs(PLUGIN_DST, exist_ok=True)
+    changed = False
+    for name, body, mode in (("herdr-plugin.toml", manifest, 0o644),
+                             ("open-panel.sh", launcher, 0o755)):
+        dst = os.path.join(PLUGIN_DST, name)
+        old = open(dst).read() if os.path.isfile(dst) else None
+        if old != body:
+            with open(dst, "w") as fh:
+                fh.write(body)
+            changed = True
+        os.chmod(dst, mode)
+    act("plugin files %s" % ("updated" if changed else "already current"))
+    return changed
+
+
+def write_json(path, data, dry):
+    """Write a JSON config, reporting whether it changed. No comment keys: SpiceEdit parses with
+    disallowUnknownFields, so one stray key rejects the whole file."""
+    body = json.dumps(data, indent=2) + "\n"
+    old = open(path).read() if os.path.isfile(path) else None
+    if old == body:
+        return False
+    if dry:
+        act("would write %s" % path)
+        return True
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(body)
+    return True
+
+
+def spice_configs(dry):
+    fmt = os.path.join(BIN_DIR, "herdr-fmt")
+    exts = ["js", "jsx", "ts", "tsx", "mjs", "cjs", "json", "jsonc", "css", "scss", "less",
+            "html", "md", "mdx", "yaml", "yml", "graphql", "vue"]
+    changed = False
+    changed |= write_json(os.path.join(SPICE_CFG_DIR, "config.json"), {"icons": "auto"}, dry)
+    changed |= write_json(os.path.join(SPICE_CFG_DIR, "format-defaults.json"),
+                          {"commands": {e: [fmt, "$FILE"] for e in exts}}, dry)
+    actions = {"actions": [
+        {"label": "Reveal in Finder", "command": '/usr/bin/open -R "$FILE"'},
+    ]}
+    editor = which("code")
+    if editor:
+        actions["actions"].append({"label": "Open in VS Code",
+                                   "command": '%s "$FILE"' % editor})
+    changed |= write_json(os.path.join(SPICE_CFG_DIR, "actions.json"), actions, dry)
+    act("SpiceEdit configs %s" % ("written" if changed else "already current"))
+    return changed
+
+
+def install_fmt(dry):
+    src = os.path.join(REPO, "libexec", "herdr-fmt")
+    if not os.path.isfile(src):
+        die("package file missing: %s" % src)
+    dst = os.path.join(BIN_DIR, "herdr-fmt")
+    body = open(src).read()
+    old = open(dst).read() if os.path.isfile(dst) else None
+    if old == body:
+        act("herdr-fmt already current")
+        return False
+    if dry:
+        act("would install %s" % dst)
+        return True
+    os.makedirs(BIN_DIR, exist_ok=True)
+    with open(dst, "w") as fh:
+        fh.write(body)
+    os.chmod(dst, 0o755)
+    act("installed %s" % dst)
+    return True
+
+
+def key_block():
+    h = herdr_bin() or "herdr"
+    lines = [BEGIN,
+             "# Managed by herdr-tools. Edit above/below this block, not inside it —",
+             "# `herdr-tools uninstall` removes exactly these lines and nothing else.",
+             "# The herdr path is absolute because the server execs this under launchd's PATH."]
+    for key, action, desc in KEYS:
+        lines += ["",
+                  "# %s -> %s" % (key, desc),
+                  "[[keys.command]]",
+                  'key = "%s"' % key,
+                  'type = "shell"',
+                  'command = "%s plugin action invoke %s --plugin %s"' % (h, action, PLUGIN_ID)]
+    lines.append(END)
+    return "\n".join(lines) + "\n"
+
+
+def inject_keys(dry):
+    """Insert or refresh the managed keybinding block, leaving everything else byte-identical."""
+    block = key_block()
+    old = open(HERDR_CFG).read() if os.path.isfile(HERDR_CFG) else ""
+    pat = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n?", re.S)
+    # Normalize the separator so install/uninstall/install is byte-stable. Appending "\n" + block
+    # onto a file whose trailing newlines vary drifts by one blank line per cycle.
+    if pat.search(old):
+        new = pat.sub(block, old)
+    else:
+        base = old.rstrip("\n")
+        new = (base + "\n\n" + block) if base else block
+    if new == old:
+        act("keybindings already current")
+        return False
+    if dry:
+        act("would %s the managed keybinding block in %s"
+            % ("refresh" if pat.search(old) else "append", HERDR_CFG))
+        return True
+    os.makedirs(HERDR_CFG_DIR, exist_ok=True)
+    with open(HERDR_CFG, "w") as fh:
+        fh.write(new)
+    act("keybindings written (%s)" % ", ".join(k for k, _a, _d in KEYS))
+    return True
+
+
+# ---------------------------------------------------------------------------------------------
+# dependencies
+# ---------------------------------------------------------------------------------------------
+
+
+def install_deps(dry):
+    brew = which("brew")
+    steps = []
+    if not which("spiceedit"):
+        steps.append(("spiceedit", ["brew", "install", "cloudmanic/spice-edit/spice-edit"],
+                      ["brew", "tap", "cloudmanic/spice-edit",
+                       "https://github.com/cloudmanic/spice-edit"]))
+    if not which("lazygit"):
+        steps.append(("lazygit", ["brew", "install", "lazygit"], None))
+    if not nerd_font_installed():
+        steps.append(("nerd font", ["brew", "install", "--cask",
+                                    "font-jetbrains-mono-nerd-font"], None))
+    if not steps and prettier_available():
+        ok("all dependencies present")
+        return
+    if not brew and steps:
+        for name, _c, _t in steps:
+            warn("%s missing and Homebrew not found — install it manually" % name)
+        return
+    for name, cmd, tap in steps:
+        if dry:
+            act("would install %s" % name)
+            continue
+        act("installing %s ..." % name)
+        if tap:
+            run(tap)
+        rc, out = run(cmd)
+        if which(name.split()[0]) or rc == 0:
+            ok("%s installed" % name)
+        else:
+            bad("%s failed:\n%s" % (name, out.strip()[-400:]))
+    if not prettier_available():
+        if dry:
+            act("would install prettier globally (npm i -g prettier)")
+        elif which("npm"):
+            act("installing prettier ...")
+            run([which("npm"), "i", "-g", "prettier"])
+            ok("prettier installed") if prettier_available() else warn("prettier install failed")
+        else:
+            warn("npm not found — format-on-save will only work in repos that vendor prettier")
+
+
+def prettier_available():
+    if which("prettier"):
+        return True
+    return bool(glob.glob(os.path.join(HOME, ".nvm", "versions", "node", "*", "bin", "prettier")))
+
+
+# ---------------------------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------------------------
+
+
+def cmd_install(args):
+    head("herdr-tools install%s" % (" (dry run — nothing will change)" if args.dry_run else ""))
+    v = herdr_version()
+    if not herdr_bin():
+        die("herdr is not installed — see https://herdr.dev")
+    if v and v < (0, 7, 0):
+        die("herdr %s is too old; plugins need >= 0.7.0" % ".".join(map(str, v)))
+    ok("herdr %s" % (".".join(map(str, v)) if v else "(version unknown)"))
+
+    if not args.no_deps:
+        head("Dependencies")
+        install_deps(args.dry_run)
+
+    head("Plugin")
+    render_plugin(args.dry_run, args.projects_root)
+    if not args.dry_run:
+        rc, out = run([herdr_bin(), "plugin", "link", PLUGIN_DST])
+        ok("plugin linked") if rc == 0 else bad("plugin link failed: %s" % out.strip()[-300:])
+
+    head("Editor configuration")
+    install_fmt(args.dry_run)
+    spice_configs(args.dry_run)
+
+    head("Keybindings")
+    inject_keys(args.dry_run)
+    if not args.dry_run:
+        run([herdr_bin(), "server", "reload-config"])
+        ok("herdr config reloaded")
+
+    if args.dry_run:
+        return 0
+    head("Done")
+    for key, _a, desc in KEYS:
+        print("  %-16s %s" % (key.replace("prefix", "ctrl+b"), desc))
+    print("\n  Run `herdr-tools doctor` to verify, and note that FILE ICONS need your")
+    print("  terminal's font set to a Nerd Font — doctor explains it.")
+    return 0
+
+
+def cmd_uninstall(args):
+    head("herdr-tools uninstall")
+    if plugin_registered():
+        rc, out = run([herdr_bin(), "plugin", "uninstall", PLUGIN_ID])
+        ok("plugin unregistered") if rc == 0 else warn("could not unregister: %s" % out.strip()[-200:])
+    else:
+        ok("plugin was not registered")
+
+    if os.path.isfile(HERDR_CFG):
+        old = open(HERDR_CFG).read()
+        new = re.sub(re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n?", "", old, flags=re.S)
+        # Collapse the gap the block leaves behind and normalize to exactly one trailing newline,
+        # mirroring inject_keys, so install/uninstall/install is byte-identical (SPEC oracle 2).
+        new = re.sub(r"\n{3,}", "\n\n", new).rstrip("\n") + "\n"
+        if new != old:
+            with open(HERDR_CFG, "w") as fh:
+                fh.write(new)
+            ok("removed managed keybindings (your own settings untouched)")
+        else:
+            ok("no managed keybindings present")
+
+    if os.path.isdir(PLUGIN_DST):
+        shutil.rmtree(PLUGIN_DST)
+        ok("removed %s" % PLUGIN_DST)
+
+    if args.purge:
+        for f in ("config.json", "format-defaults.json", "actions.json"):
+            p = os.path.join(SPICE_CFG_DIR, f)
+            if os.path.isfile(p):
+                os.remove(p)
+                ok("removed %s" % p)
+        fmt = os.path.join(BIN_DIR, "herdr-fmt")
+        if os.path.isfile(fmt):
+            os.remove(fmt)
+            ok("removed %s" % fmt)
+    else:
+        print("\n  SpiceEdit configs and herdr-fmt were kept. Use --purge to remove them.")
+
+    if herdr_bin():
+        run([herdr_bin(), "server", "reload-config"])
+    return 0
+
+
+def cmd_doctor(_args):
+    head("herdr-tools doctor")
+    fails = 0
+
+    v = herdr_version()
+    if not herdr_bin():
+        bad("herdr not installed")
+        fails += 1
+    elif v and v < (0, 7, 0):
+        bad("herdr %s < 0.7.0 (plugins unsupported)" % ".".join(map(str, v)))
+        fails += 1
+    else:
+        ok("herdr %s at %s" % (".".join(map(str, v)) if v else "?", herdr_bin()))
+
+    head("Binaries (must be absolute — the herdr server runs under launchd's minimal PATH)")
+    for name in ("spiceedit", "lazygit"):
+        p = which(name)
+        if p:
+            ok("%-10s %s" % (name, p))
+        else:
+            bad("%-10s not found" % name)
+            fails += 1
+
+    head("Plugin")
+    if plugin_registered():
+        ok("plugin '%s' registered with herdr" % PLUGIN_ID)
+    else:
+        bad("plugin '%s' not registered — run `herdr-tools install`" % PLUGIN_ID)
+        fails += 1
+    manifest = os.path.join(PLUGIN_DST, "herdr-plugin.toml")
+    if os.path.isfile(manifest):
+        body = open(manifest).read()
+        if "@@" in body:
+            bad("manifest still has unrendered placeholders")
+            fails += 1
+        else:
+            ok("manifest rendered with absolute paths")
+    else:
+        bad("manifest missing at %s" % manifest)
+        fails += 1
+
+    head("Keybindings")
+    cfg = open(HERDR_CFG).read() if os.path.isfile(HERDR_CFG) else ""
+    if BEGIN in cfg and END in cfg:
+        ok("managed block present (%s)" % ", ".join(k for k, _a, _d in KEYS))
+    else:
+        bad("managed keybinding block missing from %s" % HERDR_CFG)
+        fails += 1
+
+    head("Editor configuration")
+    for f in ("config.json", "format-defaults.json", "actions.json"):
+        p = os.path.join(SPICE_CFG_DIR, f)
+        if not os.path.isfile(p):
+            warn("%s not written" % p)
+            continue
+        try:
+            data = json.load(open(p))
+        except Exception as e:
+            bad("%s is not valid JSON: %s" % (f, e))
+            fails += 1
+            continue
+        # SpiceEdit rejects unknown top-level keys outright — catch a stray comment key here
+        # rather than letting the editor silently ignore the whole file.
+        allowed = {"config.json": {"icons"}, "format-defaults.json": {"commands"},
+                   "actions.json": {"actions"}}[f]
+        extra = set(data) - allowed
+        if extra:
+            bad("%s has keys SpiceEdit will reject (disallowUnknownFields): %s"
+                % (f, ", ".join(sorted(extra))))
+            fails += 1
+        else:
+            ok("%s valid" % f)
+
+    fmt = os.path.join(BIN_DIR, "herdr-fmt")
+    if os.access(fmt, os.X_OK):
+        ok("herdr-fmt installed")
+    else:
+        warn("herdr-fmt missing — format-on-save will no-op")
+    if prettier_available():
+        ok("prettier reachable (global or vendored)")
+    else:
+        warn("no global prettier — only repos vendoring it will format")
+
+    head("Icons")
+    font = nerd_font_installed()
+    if font:
+        ok("Nerd Font present: %s" % os.path.basename(font))
+        warn("SpiceEdit cannot detect what font your TERMINAL uses. If the file tree shows "
+             "boxes/question marks, set your terminal profile font to a Nerd Font.")
+    else:
+        warn("no Nerd Font installed — file-type icons will stay off")
+
+    print()
+    if fails:
+        bad("%d problem(s) found" % fails)
+        return 1
+    ok("all checks passed")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="herdr-tools", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("install", help="install and configure everything (idempotent)")
+    p.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
+    p.add_argument("--no-deps", action="store_true", help="skip installing dependencies")
+    p.add_argument("--projects-root", default=os.path.join(HOME, "github-projects"),
+                   help="where the editor opens when you are not inside a git repo")
+    p.set_defaults(fn=cmd_install)
+
+    p = sub.add_parser("uninstall", help="remove the plugin and managed keybindings")
+    p.add_argument("--purge", action="store_true", help="also remove SpiceEdit configs")
+    p.set_defaults(fn=cmd_uninstall)
+
+    sub.add_parser("doctor", help="diagnose the setup").set_defaults(fn=cmd_doctor)
+    sub.add_parser("version", help="print version").set_defaults(
+        fn=lambda _a: (print("herdr-tools %s" % VERSION), 0)[1])
+
+    args = ap.parse_args()
+    if not getattr(args, "fn", None):
+        ap.print_help()
+        return 0
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

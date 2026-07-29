@@ -1,0 +1,92 @@
+# herdr-tools — herdr plugin manifest. TEMPLATE: @@SPICEEDIT@@ and @@LAZYGIT@@ are replaced with
+# absolute paths by `herdr-tools install`. Do not hand-edit the installed copy; it is regenerated.
+#
+# LAYOUT this produces (prefix = ctrl+b), every panel toggling on repeat:
+#   prefix+e        editor panel, LEFT of the agent    (VS Code's explorer + editor)
+#   prefix+shift+E  editor full-width in its own tab
+#   prefix+g        lazygit panel, BELOW the agent     (VS Code's Source Control / panel)
+#
+# WHY THE PATHS ARE TEMPLATED AND ABSOLUTE: the herdr server is launched by launchd, so it execs
+# these pane commands with PATH=/usr/bin:/bin:/usr/sbin:/sbin. Neither /opt/homebrew/bin (Apple
+# Silicon) nor /usr/local/bin (Intel) nor ~/.local/bin is on it — a bare `spiceedit` or `lazygit`
+# fails to spawn with no useful error. Rendering at install time also makes one manifest correct on
+# Apple Silicon, Intel, and Linux. (Contrast: herdr-plus PROJECT TAB commands are typed into an
+# interactive shell and DO get the user's full PATH. Pane commands do not.)
+#
+# NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
+id = "herdr-tools"
+name = "herdr-tools"
+version = "0.1.0"
+description = "Tiny VS Code for herdr: SpiceEdit editor panel + lazygit source-control panel."
+min_herdr_version = "0.7.0"
+platforms = ["linux", "macos"]
+
+# ---------------------------------------------------------------------------------------------
+# Panes. `title` is LOAD-BEARING, not cosmetic: `herdr pane list` exposes no plugin_id/entrypoint,
+# so "is my panel already open?" is answered by matching this exact title.
+# ---------------------------------------------------------------------------------------------
+
+[[panes]]
+id = "editor"
+title = "Edit"
+placement = "split"
+command = ["@@SPICEEDIT@@"]
+
+[[panes]]
+id = "editor-tab"
+title = "Edit"
+placement = "tab"
+command = ["@@SPICEEDIT@@"]
+
+# lazygit requires a git work tree as its cwd, so the launcher refuses to open this panel outside a
+# repo rather than letting it error inside a pane.
+[[panes]]
+id = "git"
+title = "Git"
+placement = "split"
+command = ["@@LAZYGIT@@"]
+
+# ---------------------------------------------------------------------------------------------
+# Actions. open-panel.sh args: <entrypoint> <label> <split|tab> <right|down> <key|auto> <swap>
+#
+# `swap = yes` swaps the new pane with the agent pane right after opening — that is how the editor
+# ends up on the LEFT, because `plugin pane open --direction` accepts only right|down and there is
+# no `left`. The git panel uses direction=down with swap=no, i.e. VS Code's bottom-panel position.
+# ---------------------------------------------------------------------------------------------
+
+[[actions]]
+id = "open-editor"
+platforms = ["linux", "macos"]
+title = "Editor panel (left)"
+description = "Toggle the SpiceEdit editor in a split to the left of the current pane."
+command = ["bash", "open-panel.sh", "editor", "Edit", "split", "right", "key", "yes"]
+
+[[actions]]
+id = "open-editor-tab"
+platforms = ["linux", "macos"]
+title = "Editor (own tab)"
+description = "Open SpiceEdit full-width in its own tab, or switch to it if already open."
+command = ["bash", "open-panel.sh", "editor-tab", "Edit", "tab", "right", "key", "no"]
+
+[[actions]]
+id = "open-git"
+platforms = ["linux", "macos"]
+title = "Git panel (lazygit)"
+description = "Toggle lazygit in a split below the current pane, rooted at the repo."
+command = ["bash", "open-panel.sh", "git", "Git", "split", "down", "key", "no"]
+
+# ---------------------------------------------------------------------------------------------
+# Auto-open the editor for every new workspace/project, so a project always comes up VS-Code-shaped
+# without a keypress. Delegates to the SAME launcher the keybinding uses, so it can never produce a
+# duplicate pane and always resolves the correct project cwd.
+#
+# `auto` (rather than `key`) changes two behaviors deliberately:
+#   * a workspace that is NOT a git repo gets no editor at all — auto-opening $HOME dumps dozens of
+#     dotfiles into the tree, which is noise, not a feature;
+#   * focus is handed back to the agent pane afterwards, so your first keystrokes go to the agent.
+#
+# Workspace-scoped, NOT tab-scoped: hooking tab.created would spawn an editor beside every new tab.
+# A new git worktree also creates a workspace, so this fires there too.
+[[events]]
+on = "workspace.created"
+command = ["bash", "open-panel.sh", "editor", "Edit", "split", "right", "auto", "yes"]
