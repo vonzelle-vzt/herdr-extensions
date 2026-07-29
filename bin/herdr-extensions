@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""herdr-tools — make herdr behave like a tiny VS Code.
+"""herdr-extensions — make herdr behave like a tiny VS Code.
 
-    herdr-tools install [--dry-run] [--no-deps] [--projects-root DIR]
-    herdr-tools uninstall [--purge]
-    herdr-tools doctor
-    herdr-tools version
+    herdr-extensions install [--dry-run] [--no-deps] [--projects-root DIR]
+    herdr-extensions uninstall [--purge]
+    herdr-extensions doctor
+    herdr-extensions version
 
 Stdlib only, and deliberately targets Python 3.9 — that is what ships on macOS, so there is no
 tomllib here. Config edits are marker-delimited text injections rather than TOML round-trips, which
@@ -28,15 +28,15 @@ VERSION = "0.1.0"
 HOME = os.path.expanduser("~")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-PLUGIN_ID = "herdr-tools"
+PLUGIN_ID = "herdr-extensions"
 HERDR_CFG_DIR = os.path.join(HOME, ".config", "herdr")
 HERDR_CFG = os.path.join(HERDR_CFG_DIR, "config.toml")
 PLUGIN_DST = os.path.join(HERDR_CFG_DIR, "plugins", "local", PLUGIN_ID)
 SPICE_CFG_DIR = os.path.join(HOME, ".config", "spiceedit")
 BIN_DIR = os.path.join(HOME, ".local", "bin")
 
-BEGIN = "# >>> herdr-tools (managed) >>>"
-END = "# <<< herdr-tools (managed) <<<"
+BEGIN = "# >>> herdr-extensions (managed) >>>"
+END = "# <<< herdr-extensions (managed) <<<"
 
 # Panels: (keybinding, action id, human description)
 KEYS = [
@@ -169,7 +169,7 @@ def render_plugin(dry, projects_root):
     lazy = which("lazygit")
     missing = [n for n, p in (("spiceedit", spice), ("lazygit", lazy)) if not p]
     if missing:
-        die("cannot render plugin, missing: %s (run `herdr-tools install` without --no-deps)"
+        die("cannot render plugin, missing: %s (run `herdr-extensions install` without --no-deps)"
             % ", ".join(missing))
 
     src_manifest = os.path.join(REPO, "plugin", "herdr-plugin.toml")
@@ -261,8 +261,8 @@ def install_fmt(dry):
 def key_block():
     h = herdr_bin() or "herdr"
     lines = [BEGIN,
-             "# Managed by herdr-tools. Edit above/below this block, not inside it —",
-             "# `herdr-tools uninstall` removes exactly these lines and nothing else.",
+             "# Managed by herdr-extensions. Edit above/below this block, not inside it —",
+             "# `herdr-extensions uninstall` removes exactly these lines and nothing else.",
              "# The herdr path is absolute because the server execs this under launchd's PATH."]
     for key, action, desc in KEYS:
         lines += ["",
@@ -360,7 +360,7 @@ def prettier_available():
 
 
 def cmd_install(args):
-    head("herdr-tools install%s" % (" (dry run — nothing will change)" if args.dry_run else ""))
+    head("herdr-extensions install%s" % (" (dry run — nothing will change)" if args.dry_run else ""))
     v = herdr_version()
     if not herdr_bin():
         die("herdr is not installed — see https://herdr.dev")
@@ -393,13 +393,13 @@ def cmd_install(args):
     head("Done")
     for key, _a, desc in KEYS:
         print("  %-16s %s" % (key.replace("prefix", "ctrl+b"), desc))
-    print("\n  Run `herdr-tools doctor` to verify, and note that FILE ICONS need your")
+    print("\n  Run `herdr-extensions doctor` to verify, and note that FILE ICONS need your")
     print("  terminal's font set to a Nerd Font — doctor explains it.")
     return 0
 
 
 def cmd_uninstall(args):
-    head("herdr-tools uninstall")
+    head("herdr-extensions uninstall")
     if plugin_registered():
         rc, out = run([herdr_bin(), "plugin", "uninstall", PLUGIN_ID])
         ok("plugin unregistered") if rc == 0 else warn("could not unregister: %s" % out.strip()[-200:])
@@ -442,7 +442,7 @@ def cmd_uninstall(args):
 
 
 def cmd_doctor(_args):
-    head("herdr-tools doctor")
+    head("herdr-extensions doctor")
     fails = 0
 
     v = herdr_version()
@@ -468,7 +468,7 @@ def cmd_doctor(_args):
     if plugin_registered():
         ok("plugin '%s' registered with herdr" % PLUGIN_ID)
     else:
-        bad("plugin '%s' not registered — run `herdr-tools install`" % PLUGIN_ID)
+        bad("plugin '%s' not registered — run `herdr-extensions install`" % PLUGIN_ID)
         fails += 1
     manifest = os.path.join(PLUGIN_DST, "herdr-plugin.toml")
     if os.path.isfile(manifest):
@@ -542,7 +542,7 @@ def cmd_doctor(_args):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="herdr-tools", description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(prog="herdr-extensions", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd")
 
     p = sub.add_parser("install", help="install and configure everything (idempotent)")
@@ -558,7 +558,7 @@ def main():
 
     sub.add_parser("doctor", help="diagnose the setup").set_defaults(fn=cmd_doctor)
     sub.add_parser("version", help="print version").set_defaults(
-        fn=lambda _a: (print("herdr-tools %s" % VERSION), 0)[1])
+        fn=lambda _a: (print("herdr-extensions %s" % VERSION), 0)[1])
 
     args = ap.parse_args()
     if not getattr(args, "fn", None):

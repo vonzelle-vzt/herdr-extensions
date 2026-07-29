@@ -1,7 +1,7 @@
 # Upstream work (cloudmanic/spice-edit)
 
 SpiceEdit has no extension API — "no runtime, no plugin manager" is an explicit design goal — so the
-remaining VS-Code-shaped gaps cannot live in herdr-tools. They are patches to send upstream (MIT, Go,
+remaining VS-Code-shaped gaps cannot live in herdr-extensions. They are patches to send upstream (MIT, Go,
 clean package boundaries in `internal/`).
 
 Ordered by value per unit of work.
@@ -31,14 +31,14 @@ for the file I'm looking at". This is the blocker for *every* cross-tool feature
 ranks above the flashier ones.
 **Shape.** Write `{"file": "...", "line": N, "root": "..."}` to
 `$XDG_STATE_HOME/spiceedit/active.json` (debounced) on tab switch and cursor move. Tiny, optional,
-and it unlocks file-history / blame / test-runner panels in herdr-tools without further editor
+and it unlocks file-history / blame / test-runner panels in herdr-extensions without further editor
 changes.
 
 ## 4. Diagnostics / LSP
 
 **Gap.** The largest real difference from VS Code: no IntelliSense, no problems list.
 **Reality check.** A full LSP client is a big change and may not fit the project's "one static
-binary, no runtime" ethos. A cheaper 80% step: a diagnostics *panel* in herdr-tools that runs
+binary, no runtime" ethos. A cheaper 80% step: a diagnostics *panel* in herdr-extensions that runs
 `tsc --noEmit` / `eslint` and lists results — no editor change needed, though jump-to-line needs #3.
 
 ## Etiquette

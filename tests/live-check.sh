@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# live-check.sh — run herdr-tools' behavioral oracles against a RUNNING herdr session.
+# live-check.sh — run herdr-extensions' behavioral oracles against a RUNNING herdr session.
 #
 #   tests/live-check.sh
 #
@@ -12,7 +12,7 @@ set -uo pipefail
 
 HERDR="$(command -v herdr)"
 PY=/usr/bin/python3
-TMP="${TMPDIR:-/tmp}/herdr-tools-livecheck.$$"
+TMP="${TMPDIR:-/tmp}/herdr-extensions-livecheck.$$"
 pass=0
 fail=0
 
@@ -140,13 +140,13 @@ ps=json.load(sys.stdin)['result']['panes']
 print(next((p['pane_id'] for p in ps if p['workspace_id']==ws and not (p.get('label') or '')),''))" "$WS_REPO")"
   "$HERDR" pane zoom "$AG" --on >/dev/null 2>&1; "$HERDR" pane zoom "$AG" --off >/dev/null 2>&1
   sleep 1
-  "$HERDR" plugin action invoke open-git --plugin herdr-tools >/dev/null 2>&1; sleep 6
+  "$HERDR" plugin action invoke open-git --plugin herdr-extensions >/dev/null 2>&1; sleep 6
   GP="$(find_pane "$WS_REPO" Git)"
   if [ -n "$GP" ]; then
     ok "git panel opened (rooted at $(pane_field "$GP" cwd))"
     "$HERDR" pane zoom "$GP" --on >/dev/null 2>&1; "$HERDR" pane zoom "$GP" --off >/dev/null 2>&1
     sleep 1
-    "$HERDR" plugin action invoke open-git --plugin herdr-tools >/dev/null 2>&1; sleep 4
+    "$HERDR" plugin action invoke open-git --plugin herdr-extensions >/dev/null 2>&1; sleep 4
     if [ "$(count_label "$WS_REPO" Git)" = "0" ]; then
       ok "ORACLE 6: second invoke closed it"
     else

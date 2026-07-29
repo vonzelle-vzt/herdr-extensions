@@ -53,7 +53,7 @@ PY=/usr/bin/python3
 GIT=/usr/bin/git
 
 # Where to point the editor when a keypress happens outside any repo. Shows project folders
-# instead of $HOME's dotfiles. Rendered by `herdr-tools install --projects-root DIR`.
+# instead of $HOME's dotfiles. Rendered by `herdr-extensions install --projects-root DIR`.
 PROJECTS_ROOT="@@PROJECTS_ROOT@@"
 
 panes_json="$("$herdr_bin" pane list 2>/dev/null || true)"
@@ -140,13 +140,13 @@ fi
 
 if [ "$mode" = "tab" ]; then
   exec "$herdr_bin" plugin pane open \
-    --plugin herdr-tools --entrypoint "$entrypoint" \
+    --plugin herdr-extensions --entrypoint "$entrypoint" \
     --placement tab --cwd "$proj" --focus
 fi
 
 # --target-pane pins the split beside the pane the user is actually in — required for the event,
 # where global focus is still on the old workspace.
-set -- --plugin herdr-tools --entrypoint "$entrypoint" --placement split \
+set -- --plugin herdr-extensions --entrypoint "$entrypoint" --placement split \
        --direction "$direction" --cwd "$proj" --focus
 [ -n "${target:-}" ] && set -- "$@" --target-pane "$target"
 opened="$("$herdr_bin" plugin pane open "$@" 2>/dev/null || true)"

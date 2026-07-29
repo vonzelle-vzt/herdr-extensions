@@ -1,4 +1,4 @@
-# herdr-tools — SPEC
+# herdr-extensions — SPEC
 
 Turn [herdr](https://herdr.dev) into a "tiny VS Code" in one command: an editor panel, a
 source-control panel, file-type icons, git-status coloring, and format-on-save — installed,
@@ -12,20 +12,20 @@ speculative.
 
 herdr ships a plugin system but no editor. SpiceEdit is an excellent terminal editor but has no
 plugin system by design ("no runtime, no plugin manager"). Gluing them together correctly takes ~10
-non-obvious steps — several of which fail *silently* if you get them wrong. `herdr-tools install`
+non-obvious steps — several of which fail *silently* if you get them wrong. `herdr-extensions install`
 does them right, is idempotent, and is fully reversible.
 
 ## v1 scope — installer + panels bundle
 
 | Command | Behavior |
 | --- | --- |
-| `herdr-tools install` | Install missing dependencies, register the herdr plugin, write SpiceEdit configs, inject keybindings. Idempotent: safe to re-run. `--dry-run` prints the plan and changes nothing. |
-| `herdr-tools uninstall` | Unregister the plugin and remove the managed keybinding block. Leaves your own settings untouched. `--purge` also removes the SpiceEdit configs it wrote. |
-| `herdr-tools doctor` | Diagnose every moving part and explain each failure. Read-only. Exit 1 if anything is broken. |
+| `herdr-extensions install` | Install missing dependencies, register the herdr plugin, write SpiceEdit configs, inject keybindings. Idempotent: safe to re-run. `--dry-run` prints the plan and changes nothing. |
+| `herdr-extensions uninstall` | Unregister the plugin and remove the managed keybinding block. Leaves your own settings untouched. `--purge` also removes the SpiceEdit configs it wrote. |
+| `herdr-extensions doctor` | Diagnose every moving part and explain each failure. Read-only. Exit 1 if anything is broken. |
 
 ### What `install` produces
 
-- **Plugin** `herdr-tools` linked into herdr, providing three panes and three actions:
+- **Plugin** `herdr-extensions` linked into herdr, providing three panes and three actions:
   editor split, editor tab, and a lazygit panel.
 - **Keybindings**, injected between managed markers in `~/.config/herdr/config.toml`:
   `prefix+e` editor panel (left), `prefix+shift+e` editor tab, `prefix+g` git panel.
@@ -93,7 +93,7 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
    user's job — silently emitting `U+F07B` into a terminal without the font shows tofu boxes.
 
 10. **Never edit a user's config wholesale.** Keybindings are injected between
-    `# >>> herdr-tools (managed) >>>` markers so `uninstall` removes exactly what was added and a
+    `# >>> herdr-extensions (managed) >>>` markers so `uninstall` removes exactly what was added and a
     user's own keys, comments, and settings survive both operations.
 
 ## Verification (each must pass before release)
@@ -116,9 +116,9 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 A GitHub repo that is its own Homebrew tap (the pattern both `spice-edit` and `herdr-plus` use):
 
 ```
-brew tap <owner>/herdr-tools https://github.com/<owner>/herdr-tools
-brew install <owner>/herdr-tools/herdr-tools
-herdr-tools install
+brew tap <owner>/herdr-extensions https://github.com/<owner>/herdr-extensions
+brew install <owner>/herdr-extensions/herdr-extensions
+herdr-extensions install
 ```
 
 Plus `curl -fsSL .../install.sh | sh` for non-Homebrew hosts. No compiled artifact: the CLI is

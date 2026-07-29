@@ -1,5 +1,5 @@
-# herdr-tools — herdr plugin manifest. TEMPLATE: @@SPICEEDIT@@ and @@LAZYGIT@@ are replaced with
-# absolute paths by `herdr-tools install`. Do not hand-edit the installed copy; it is regenerated.
+# herdr-extensions — herdr plugin manifest. TEMPLATE: @@SPICEEDIT@@ and @@LAZYGIT@@ are replaced with
+# absolute paths by `herdr-extensions install`. Do not hand-edit the installed copy; it is regenerated.
 #
 # LAYOUT this produces (prefix = ctrl+b), every panel toggling on repeat:
 #   prefix+e        editor panel, LEFT of the agent    (VS Code's explorer + editor)
@@ -14,8 +14,8 @@
 # interactive shell and DO get the user's full PATH. Pane commands do not.)
 #
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
-id = "herdr-tools"
-name = "herdr-tools"
+id = "herdr-extensions"
+name = "herdr-extensions"
 version = "0.1.0"
 description = "Tiny VS Code for herdr: SpiceEdit editor panel + lazygit source-control panel."
 min_herdr_version = "0.7.0"

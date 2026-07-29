@@ -1,9 +1,9 @@
-# herdr-tools
+# herdr-extensions
 
 Make [herdr](https://herdr.dev) behave like a tiny VS Code, in one command.
 
 ```
-herdr-tools install
+herdr-extensions install
 ```
 
 You get an **editor panel** on the left, a **source-control panel** below, file-type icons,
@@ -38,13 +38,13 @@ is the git UI. Gluing the three together correctly takes about ten steps, severa
 
 ```bash
 # Homebrew (this repo is its own tap)
-brew tap <owner>/herdr-tools https://github.com/<owner>/herdr-tools
-brew install <owner>/herdr-tools/herdr-tools
-herdr-tools install
+brew tap <owner>/herdr-extensions https://github.com/<owner>/herdr-extensions
+brew install <owner>/herdr-extensions/herdr-extensions
+herdr-extensions install
 
 # or, without Homebrew
-curl -fsSL https://raw.githubusercontent.com/<owner>/herdr-tools/main/install.sh | sh
-herdr-tools install
+curl -fsSL https://raw.githubusercontent.com/<owner>/herdr-extensions/main/install.sh | sh
+herdr-extensions install
 ```
 
 Requires **herdr ≥ 0.7.0**. `install` will install anything missing — `spiceedit`, `lazygit`, a Nerd
@@ -53,9 +53,9 @@ Font, `prettier` — or run it with `--no-deps` to manage those yourself.
 ## Commands
 
 ```
-herdr-tools install [--dry-run] [--no-deps] [--projects-root DIR]
-herdr-tools uninstall [--purge]
-herdr-tools doctor
+herdr-extensions install [--dry-run] [--no-deps] [--projects-root DIR]
+herdr-extensions uninstall [--purge]
+herdr-extensions doctor
 ```
 
 - **`install`** is idempotent — re-run it any time; a second run reports zero changes.
@@ -84,12 +84,12 @@ tree all require changes *inside* SpiceEdit, which has no extension API. Those b
 ## Development
 
 ```bash
-./bin/herdr-tools doctor        # read-only, safe anywhere
-./bin/herdr-tools install --dry-run
+./bin/herdr-extensions doctor        # read-only, safe anywhere
+./bin/herdr-extensions install --dry-run
 ./tests/live-check.sh           # behavioral oracles against a running herdr
 ```
 
-`bin/herdr-tools` is stdlib-only Python targeting **3.9** (what macOS ships), so there is no
+`bin/herdr-extensions` is stdlib-only Python targeting **3.9** (what macOS ships), so there is no
 `tomllib` — config edits are marker-delimited text injections, which is also why your comments and
 settings survive. [SPEC.md](SPEC.md) records every design decision and the reason behind it; each one
 is a silent failure this package prevents.
