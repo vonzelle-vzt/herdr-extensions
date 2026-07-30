@@ -97,6 +97,23 @@ has a minimum width below which it refuses to draw. Panels are sized in columns 
 neither end is reachable. If you are on upstream `spiceedit`, install
 [`herdr-edit`](https://github.com/vonzelle-vzt/herdr-edit) — its layout degrades instead of refusing.
 
+**The editor panel opens but shows no file tree.** The panel is narrower than the editor's tree
+threshold. Upstream `spiceedit` hides its tree below 76 columns, which switches the explorer off in
+exactly the place it earns its keep — a split beside an agent, where the pane is 60-odd columns.
+[`herdr-edit`](https://github.com/vonzelle-vzt/herdr-edit) narrows the tree toward 18 columns instead
+and only hides it below 42. `./tests/live-check.sh` checks this directly (ORACLE 19) by reading the
+pane rather than trusting its width.
+
+**The editor opened in its own tab instead of beside my agent.** Your layout is under
+`MIN_COLS + MIN_PEER` usable columns, so a side-by-side cannot give both panes a readable width. Note
+that herdr's own sidebar can be 36 of them — `prefix+b` collapses it and usually resolves this
+outright. Everything above that floor splits; if you see a tab above it, that is a bug.
+
+**A project opened with no editor at all.** The workspace is rooted at `$HOME` (a plain
+`herdr workspace create` with no `--cwd` does this) and its label matched no single repo under
+`PROJECTS_ROOT`. Auto-open stays silent rather than rooting a file tree in your home directory. Give
+the workspace a label matching the project directory, or create it with `--cwd`.
+
 **No diagnostics.** They need a language server *and* `herdr-edit`. Upstream `spiceedit` has no LSP
 client. `doctor` reports which editor it found.
 
@@ -124,6 +141,10 @@ is the git UI. Gluing the three together correctly takes about ten steps, severa
 - sizes each panel in **columns**, not as a fraction — `herdr plugin pane open` has no `--ratio`, so
   every plugin panel otherwise opens at a hard 50/50, and the editor has a minimum width below which
   it refuses to draw at all
+- decides split-vs-tab from the **floors** rather than the requested width, and lifts the editor to a
+  width that can actually show a file tree whenever the split can host one beside a readable agent
+- falls back to the **workspace label** to find your repo when the pane is rooted at `$HOME`, so a
+  workspace called `affiliate crm` opens `affiliate-crm-fintech` instead of nothing at all
 
 ## Install
 

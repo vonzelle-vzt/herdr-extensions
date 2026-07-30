@@ -123,6 +123,49 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
     `# >>> herdr-extensions (managed) >>>` markers so `uninstall` removes exactly what was added and a
     user's own keys, comments, and settings survive both operations.
 
+11. **A geometry guard tests the FLOORS, never the request.** The split-vs-tab decision and the
+    panel width are two questions, and mixing them cost a working layout. v0.4.0 asked "can I fit
+    the requested 88 columns and still leave `MIN_PEER`?" before opening; on a 145-column terminal
+    herdr keeps 36 for its sidebar, leaving 109, so `109 - 88 = 21` failed the 44-column floor and
+    the editor went to its own tab. The clamp that runs immediately after would have sized that same
+    panel to `MAX_FRAC` — 60 columns, agent 49, both floors clear. The guard refused a layout on a
+    number the code never uses, across every split from 100 to 131 columns.
+    So: the **guard** answers only `avail >= MIN_COLS + MIN_PEER`; the **clamp** alone owns
+    `MAX_FRAC`, the peer ceiling and the requested width, which is a *preference*. All three
+    constants live in one `GEOMETRY POLICY` block and both test suites parse them out of the
+    launcher — `check-sizing.py` used to declare its own copies, reintroducing exactly the drift its
+    docstring claimed to prevent.
+
+12. **A panel wide enough to DRAW can still be too narrow to be the thing you asked for.** An Edit
+    panel with no file tree renders a `≡` and the words "click open from the tree" with nothing to
+    click. `MAX_FRAC` cannot see that: at a 130-column split it capped the panel at 71 columns
+    without asking what 71 columns *show*. So each panel may declare a "useful" width (argument 8)
+    and the clamp lifts the panel to clear it whenever the split can host it beside a readable peer.
+    It overrides `MAX_FRAC` deliberately — a panel at 55% that cannot show its tree is not a milder
+    version of the layout, it is a different and worse one — but never `MIN_PEER`.
+    The editor passes **70** = herdr-edit `defaultSidebarWidth` + `minEditorAfterDrag`, the width at
+    which it grants the tree its full 30 columns. It is a comfort target, not a floor: since the
+    tree-narrowing change the tree survives down to 42 columns, so nothing needs a tab fallback.
+
+13. **A workspace named after a project opens that project.** `herdr workspace create` and
+    herdr-plus Projects both leave the root pane at `$HOME` unless given `--cwd`, and auto-open
+    refuses to root a file tree at `$HOME` (decision 4 — the dotfile-soup problem). The two combined
+    meant a workspace labelled `affiliate crm` silently got **no editor at all**, which reads as a
+    broken extension. The label is the only thing that knows which repo was meant, so it is the
+    fallback: slugify it, match `PROJECTS_ROOT` for an exact directory, else a **unique** prefix
+    (`affiliate crm` → `affiliate-crm-fintech`), and require a git repo.
+    Ambiguity is never guessed. Two candidates opens nothing, because the wrong project is worse
+    than no project. A real repo cwd always outranks the label.
+
+14. **Read the pane, not the arithmetic.** Every layer can report success while the user sees
+    nothing. The pane existed, its width cleared the editor minimum, the editor drew a start page —
+    and there were no files on screen. Only `pane read` catches that, which is why ORACLE 19 asserts
+    on rendered output rather than on geometry.
+    🔴 `pane read --lines N` returns the **last** N lines, like `tail`. The file tree is drawn at the
+    TOP, so ORACLE 8 spent its life reading blank rows and reporting *"no icon glyphs (expected if no
+    Nerd Font is installed)"* while 11 glyphs were on screen — a false negative wearing a plausible
+    excuse, which is worse than a failure because nobody investigates it. Omit `--lines`.
+
 ## Verification (each must pass before release)
 
 | # | Check | Oracle |
@@ -140,8 +183,13 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 | 11 | No keybinding collisions | `doctor` reports 0 conflicts against the runtime-derived reserved set; re-running with the v0.1.0 keymap reports `prefix+e`->`edit_scrollback` and `prefix+g`->`goto` |
 | 12 | Install refuses on a clash | Add `key = "prefix+shift+e"` to the user's own config; `install` exits 1 and changes nothing; `--force` proceeds |
 | 13 | bash 3.2 parses the launcher | `/bin/bash -n plugin/open-panel.sh` exits 0, and no heredoc line contains an apostrophe |
-| 14 | Panel sizing is correct and idempotent | Against `tests/fixtures/edges-2pane.json`: 88 -> 88 cols; second-child pane inverts to `1-want`; every screen width from 64 to 200 yields >= 50 columns; asking for the current size emits no resize |
+| 14 | Panel sizing is correct and idempotent | Against `tests/fixtures/edges-2pane.json`: 88 -> 88 cols; second-child pane inverts to `1-want`; every screen width from 64 to 200 yields >= 50 columns; asking for the current size emits no resize; the peer never drops under `MIN_PEER`; a 109-col split gives 60/49 — `tests/check-sizing.py` |
 | 15 | Terminal font diagnosed by name | Under Apple Terminal, `doctor` names the profile and its font and says glyphs will not render; under Ghostty with a Nerd Font it passes |
+| 16 | Panels parse and read the active file | Every `libexec/` panel parses under bash 3.2; no apostrophe in any heredoc; repo-scoped panels name the repo with no file open, file-scoped ones say they have none; all survive a missing `active.json` — `tests/check-panels.sh` |
+| 17 | Split-vs-tab is a floor test | Against a stubbed herdr: every width `MIN_COLS+MIN_PEER`..131 splits; one column under the floor becomes a tab; the original 69-column case still becomes a tab; a fractional bottom panel is never diverted; a non-editor entrypoint is never rewritten to `editor-tab` — `tests/check-viability.sh`. Must be confirmed RED against the raw-request guard first |
+| 18 | Workspace label resolves a project | Against a stubbed herdr and a fixture `PROJECTS_ROOT`: a unique prefix resolves; an exact match beats a longer sibling; an ambiguous prefix opens nothing; a non-repo directory never wins; an unmatched label stays silent on auto-open; a real repo cwd outranks the label — `tests/check-project-resolve.sh` |
+| 19 | The panel actually shows files | `pane read` on the auto-opened editor contains `EXPLORER`. The end-to-end check: auto-opened, sized wide enough, and the editor chose to draw its tree. **No `--lines`** — it is `tail`-like and the tree is at the top |
+| 20 | The gate runs every suite | `live-check.sh` delegates to `check-panels.sh`, `check-viability.sh` and `check-project-resolve.sh` rather than reimplementing them, and restores the originally focused workspace when it is done |
 
 ## Distribution
 
