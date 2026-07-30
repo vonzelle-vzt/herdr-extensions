@@ -204,11 +204,28 @@ Anything else that needs to live *inside* the editor lives in
 ./tests/live-check.sh                # behavioral oracles against a running herdr
 ./tests/check-panels.sh              # 25 panel oracles — no server needed
 ./tests/check-viability.sh           # split-vs-tab decision, against a stubbed herdr
+./tests/check-project-resolve.sh     # which repo a workspace opens, against a stubbed herdr
 /usr/bin/python3 tests/check-sizing.py   # panel geometry, against a fixture
 ```
 
-The last three run entirely offline, which matters: they are the checks that catch the regressions
+The last four run entirely offline, which matters: they are the checks that catch the regressions
 that shipped in v0.1.0 and v0.4.0, and they must work even when the herdr server is unreachable.
+
+### Which project the panel opens
+
+On `workspace.created` the editor opens automatically, so a project comes up VS Code-shaped with no
+keypress. Resolution order:
+
+1. the focused pane's cwd, widened to `git rev-parse --show-toplevel` — the repo root, like VS Code;
+2. failing that, the **workspace label** matched against `PROJECTS_ROOT` — slugified, an exact
+   directory match first, then a *unique* prefix match, and it must be a git repo;
+3. failing that: auto-open does nothing, a keypress falls back to `PROJECTS_ROOT`.
+
+Step 2 exists because `herdr workspace create` and herdr-plus Projects both leave the root pane at
+`$HOME` unless you pass `--cwd`, and the launcher refuses to root a file tree at `$HOME` — that is
+the dotfile-soup problem. So a workspace labelled `affiliate crm` used to get **no editor at all**;
+it now opens `affiliate-crm-fintech`. Ambiguity is never guessed: two candidate repos means nothing
+opens, because the wrong project is worse than none.
 
 ### Panel width, and why the editor sometimes gets its own tab
 

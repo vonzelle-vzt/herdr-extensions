@@ -22,7 +22,7 @@
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
 id = "herdr-extensions"
 name = "herdr-extensions"
-version = "0.4.1"
+version = "0.4.2"
 description = "Tiny VS Code for herdr: editor + lazygit + problems/search/todo/blame/markdown/tests panels."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
@@ -129,7 +129,7 @@ id = "open-editor"
 platforms = ["linux", "macos"]
 title = "Editor panel (left)"
 description = "Toggle the SpiceEdit editor in a split to the left of the current pane."
-command = ["bash", "open-panel.sh", "editor", "Edit", "split", "right", "key", "yes", "88"]
+command = ["bash", "open-panel.sh", "editor", "Edit", "split", "right", "key", "yes", "88", "76"]
 
 [[actions]]
 id = "open-editor-tab"
@@ -216,4 +216,4 @@ command = ["bash", "open-panel.sh", "tests", "Tests", "split", "down", "key", "n
 # A new git worktree also creates a workspace, so this fires there too.
 [[events]]
 on = "workspace.created"
-command = ["bash", "open-panel.sh", "editor", "Edit", "split", "right", "auto", "yes", "88"]
+command = ["bash", "open-panel.sh", "editor", "Edit", "split", "right", "auto", "yes", "88", "76"]

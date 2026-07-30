@@ -16,7 +16,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MARK = "edges_raw, pane_id, target, min_cols, min_peer, max_frac = sys.argv[1:7]"
+MARK = "edges_raw, pane_id, target, min_cols, min_peer, max_frac, min_useful = sys.argv[1:8]"
 
 src = open(os.path.join(ROOT, "plugin", "open-panel.sh")).read()
 if MARK not in src:
@@ -25,13 +25,15 @@ BODY = MARK + src.split(MARK, 1)[1].split("EOF\n)", 1)[0]
 
 # The bash side of the same policy. These feed the block above as argv, exactly as the launcher
 # does, so a change to either number is picked up here with no edit to this file.
-POLICY = dict(re.findall(r"^(MIN_COLS|MIN_PEER|MAX_FRAC)=([0-9.]+)", src, re.M))
-for key in ("MIN_COLS", "MIN_PEER", "MAX_FRAC"):
+POLICY = dict(re.findall(r"^(MIN_COLS|MIN_PEER|MAX_FRAC|TREE_COLS)=([0-9.]+)", src, re.M))
+for key in ("MIN_COLS", "MIN_PEER", "MAX_FRAC", "TREE_COLS"):
     if key not in POLICY:
         sys.exit("could not find %s in the geometry policy block of open-panel.sh" % key)
 MIN_COLS = int(POLICY["MIN_COLS"])
 MIN_PEER = int(POLICY["MIN_PEER"])
 MAX_FRAC = float(POLICY["MAX_FRAC"])
+# herdr-edit hides the file tree below this, so an Edit panel under it is not a files panel.
+TREE_COLS = int(POLICY["TREE_COLS"])
 
 # Below this a side-by-side is genuinely impossible and the launcher opens a tab instead, so the
 # clamp is never asked to protect the peer there. Mirrors the viability guard in open-panel.sh.
@@ -40,9 +42,9 @@ SPLITTABLE = MIN_COLS + MIN_PEER
 BASE = json.load(open(os.path.join(ROOT, "tests", "fixtures", "edges-2pane.json")))
 
 
-def calc(doc, pane, target):
+def calc(doc, pane, target, useful=0):
     argv = ["-", json.dumps(doc), pane, target,
-            str(MIN_COLS), str(MIN_PEER), str(MAX_FRAC)]
+            str(MIN_COLS), str(MIN_PEER), str(MAX_FRAC), str(useful)]
     ns = {"json": json, "sys": type("S", (), {"argv": argv})()}
     out = []
     ns["print"] = lambda *a: out.append(" ".join(map(str, a)))
@@ -50,11 +52,11 @@ def calc(doc, pane, target):
     return out[0] if out else None
 
 
-def resulting_cols(width, pane, target):
+def resulting_cols(width, pane, target, useful=0):
     doc = json.loads(json.dumps(BASE))
     split = doc["result"]["edges"]["layout"]["splits"][0]
     split["rect"]["width"] = width
-    move = calc(doc, pane, target)
+    move = calc(doc, pane, target, useful)
     ratio = split["ratio"]
     if move:
         direction, amount = move.split()
@@ -115,6 +117,42 @@ for width in (64, 80, 120, 160, 200):
         cols, _ = resulting_cols(width, "edit", want)
         if cols < 50:
             fails.append("%dcol/want %s -> %d cols, under SpiceEdit minWidth 50" % (width, want, cols))
+
+# --- the useful threshold: a files panel with no file tree is not a files panel ------------------
+# The editor hides its tree below TREE_COLS, and MAX_FRAC cannot see that. At a 130-column split
+# MAX_FRAC caps the panel at 71 and the tree vanishes even though TREE_COLS + MIN_PEER fits with 10
+# columns to spare. So whenever the tree CAN sit beside a readable agent, it must.
+TREE_FITS = TREE_COLS + MIN_PEER
+for width in range(TREE_FITS, 241):
+    cols, _ = resulting_cols(width, "edit", "88", useful=TREE_COLS)
+    if cols < TREE_COLS:
+        fails.append("%dcol -> %d cols, under TREE_COLS %d (tree would hide, and it fits)"
+                     % (width, cols, TREE_COLS))
+    if width - cols < MIN_PEER:
+        fails.append("%dcol -> peer %d, under MIN_PEER %d (the lift must not starve the agent)"
+                     % (width, width - cols, MIN_PEER))
+
+# Exactly at the boundary the tree gets its columns and the agent gets precisely its floor.
+check("tree boundary/panel", resulting_cols(TREE_FITS, "edit", "88", useful=TREE_COLS)[0], TREE_COLS)
+check("tree boundary/peer", MIN_PEER,
+      TREE_FITS - resulting_cols(TREE_FITS, "edit", "88", useful=TREE_COLS)[0])
+
+# One column short of fitting, the lift must NOT fire — the agent floor outranks the file tree.
+below, _ = resulting_cols(TREE_FITS - 1, "edit", "88", useful=TREE_COLS)
+if below >= TREE_COLS:
+    fails.append("%dcol -> %d cols: lifted past TREE_COLS with no room for MIN_PEER"
+                 % (TREE_FITS - 1, below))
+if (TREE_FITS - 1) - below < MIN_PEER:
+    fails.append("%dcol -> peer %d, under MIN_PEER %d" % (TREE_FITS - 1, (TREE_FITS - 1) - below, MIN_PEER))
+
+# The threshold is opt-in. A bottom panel passes 0 and must size exactly as it did before.
+for width in (109, 130, 160, 200):
+    if resulting_cols(width, "edit", "88", useful=0) != resulting_cols(width, "edit", "88"):
+        fails.append("%dcol: useful=0 changed the result, the threshold is not opt-in" % width)
+
+# The user terminal that started all this: 109 usable columns cannot host tree + agent
+# (76 + 44 = 120), so the lift must stay out of the way rather than starve the agent.
+check("109col tree cannot fit", resulting_cols(109, "edit", "88", useful=TREE_COLS)[0], 60)
 
 if fails:
     print("FAIL")

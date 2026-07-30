@@ -49,6 +49,7 @@ direction="${4:-right}"     # right | down  (split only; we swap afterwards for 
 trigger="${5:-key}"         # key | auto    (auto = fired from an event, not a keypress)
 swap="${6:-yes}"            # yes = swap after opening so the panel lands left/above
 ratio="${7:-}"              # target fraction of the split for THIS panel; empty = leave herdr's
+useful="${8:-0}"            # columns below which this panel loses its point (0 = no such width)
 herdr_bin="${HERDR_BIN_PATH:-herdr}"
 PY=/usr/bin/python3
 GIT=/usr/bin/git
@@ -74,6 +75,18 @@ PROJECTS_ROOT="@@PROJECTS_ROOT@@"
 MIN_COLS=56          # SpiceEdit minWidth(50) + tab bar/status margin, so the wall is never hit
 MIN_PEER=44          # below this the pane you split AWAY from stops being readable
 MAX_FRAC=0.55        # past this the panel is eating the agent, which defeats the layout
+
+# A panel can be wide enough to DRAW and still too narrow to be the thing you asked for. The editor
+# hides its file tree below herdr-edit `sidebarNeeds` (76 = a 30-column tree + a readable editor),
+# so a 60-column Edit panel renders a hamburger and the words "click open from the tree" with no
+# tree in sight — technically fine, useless as a file explorer.
+#
+# MAX_FRAC alone cannot see that. At a 130-column split it caps the panel at 71 and hides the tree
+# even though 76 + MIN_PEER fits with 10 columns spare — the same mistake as the old viability guard,
+# a limit that ignores the number that actually changes what you SEE. So the launcher takes a
+# per-panel "useful" threshold (argument 8) and lifts the panel to clear it whenever the split can
+# host it alongside a readable peer. Passed as 0 by the bottom panels, which have no such threshold.
+TREE_COLS=76         # herdr-edit sidebarNeeds — below this the file tree auto-hides
 
 panes_json="$("$herdr_bin" pane list 2>/dev/null || true)"
 
@@ -118,11 +131,13 @@ else:
     else:
         decision, out_pane = "OPEN", pane_id
 
-print("\t".join([decision, out_pane or "", tab_id, cwd]))
+ws_id = ctx.get("workspace_id") or cur.get("workspace_id") or ""
+
+print("\t".join([decision, out_pane or "", tab_id, cwd, ws_id]))
 EOF
 )"
 
-IFS=$'\t' read -r decision target tab_id cwd <<<"${plan:-}"
+IFS=$'\t' read -r decision target tab_id cwd ws_id <<<"${plan:-}"
 decision="${decision:-OPEN}"
 
 case "$decision" in
@@ -144,6 +159,59 @@ esac
 proj=""
 if [ -n "$cwd" ] && top="$("$GIT" -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
   proj="$top"                       # inside a repo -> the repo root
+fi
+
+# Still nothing? Try the WORKSPACE LABEL against PROJECTS_ROOT before giving up.
+#
+# WHY. A workspace whose pane cwd is $HOME gets no editor at all on auto-open, because rooting the
+# tree at $HOME is the dotfile-soup problem this launcher exists to avoid. But a workspace LABELLED
+# "affiliate crm" plainly names a project — herdr-plus Projects and a plain `herdr workspace create`
+# both leave the root pane at $HOME unless you pass --cwd, so the label is the only thing that knows
+# which repo you meant, and the panel silently never appeared. That reads as a broken extension.
+#
+# Matching is deliberately conservative, because opening the WRONG repo is worse than opening none:
+# slugify the label, accept an exact directory match, else a UNIQUE prefix match ("affiliate crm" ->
+# affiliate-crm-fintech), and require a git repo. Two or more candidates means we do not actually
+# know, so we stay silent and let the existing fallbacks run.
+if [ -z "$proj" ] && [ -n "${ws_id:-}" ] && [ -d "$PROJECTS_ROOT" ]; then
+  proj="$("$PY" - "$("$herdr_bin" workspace list 2>/dev/null)" "$ws_id" "$PROJECTS_ROOT" <<'EOF' 2>/dev/null || true
+import json, os, re, sys
+
+ws_raw, ws_id, root = sys.argv[1:4]
+try:
+    spaces = json.loads(ws_raw)["result"]["workspaces"]
+except Exception:
+    spaces = []
+
+label = ""
+for w in spaces:
+    if w.get("workspace_id") == ws_id:
+        label = w.get("label") or ""
+        break
+
+# "Affiliate CRM (v2)" -> "affiliate-crm-v2". A label that slugifies to nothing cannot match.
+slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+if slug:
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        names = []
+
+    def is_repo(name):
+        return os.path.isdir(os.path.join(root, name, ".git"))
+
+    hit = ""
+    if slug in names and is_repo(slug):
+        hit = slug
+    else:
+        # A unique prefix match only. Ambiguity means we do not know which repo was meant.
+        near = [n for n in names if n.startswith(slug) and is_repo(n)]
+        if len(near) == 1:
+            hit = near[0]
+    if hit:
+        print(os.path.join(root, hit))
+EOF
+)"
 fi
 
 if [ -z "$proj" ]; then
@@ -244,7 +312,7 @@ fi
 # a vertical (down) panel too.
 if [ -n "$ratio" ] && [ -n "$new_pane" ]; then
   edges_json="$("$herdr_bin" pane edges --pane "$new_pane" 2>/dev/null || true)"
-  move="$("$PY" - "$edges_json" "$new_pane" "$ratio" "$MIN_COLS" "$MIN_PEER" "$MAX_FRAC" <<'EOF' 2>/dev/null || true
+  move="$("$PY" - "$edges_json" "$new_pane" "$ratio" "$MIN_COLS" "$MIN_PEER" "$MAX_FRAC" "$useful" <<'EOF' 2>/dev/null || true
 import json, sys
 
 # SpiceEdit refuses to draw below 50 columns and its file tree is a fixed 30, so a panel sized as
@@ -264,10 +332,11 @@ import json, sys
 # whole script then fails to parse — silently, because herdr just sees the action do nothing.
 # A value below 1 is still accepted and taken as a literal fraction, for a vertical panel where
 # columns are the wrong unit.
-edges_raw, pane_id, target, min_cols, min_peer, max_frac = sys.argv[1:7]
+edges_raw, pane_id, target, min_cols, min_peer, max_frac, min_useful = sys.argv[1:8]
 MIN_COLS = int(min_cols)     # minWidth(50) + tab bar/status margin, so the wall is never hit
 MIN_PEER = int(min_peer)     # the pane we split away from stays readable
 MAX_FRAC = float(max_frac)   # past this the panel is eating the agent, which defeats the layout
+MIN_USEFUL = int(min_useful) # width below which this panel stops being the thing you asked for
 try:
     lay = json.loads(edges_raw)["result"]["edges"]["layout"]
     me = next(p["rect"] for p in lay["panes"] if p["pane_id"] == pane_id)
@@ -301,6 +370,14 @@ try:
             # second term. Taking the min of both means the requested width shrinks to fit rather
             # than being refused, which is the whole reason the guard above can stay a floor test.
             want = min(want / span, MAX_FRAC, (span - MIN_PEER) / float(span))
+
+            # Lift to the useful threshold when it fits beside a readable peer. This deliberately
+            # overrides MAX_FRAC: a panel at 55% that cannot show its file tree is not a milder
+            # version of the layout, it is a different and worse one. Guarded by the same peer
+            # ceiling as everything else, so it can never be the thing that starves the agent.
+            if MIN_USEFUL and MIN_USEFUL <= span - MIN_PEER:
+                want = max(want, MIN_USEFUL / float(span))
+
             want = max(want, min(MIN_COLS / span, 0.9))
 
         # `ratio` is the share belonging to the FIRST child, so a second-child panel that wants
