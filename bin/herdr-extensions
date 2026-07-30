@@ -145,12 +145,39 @@ def nerd_font_installed():
     return None
 
 
+def server_error(out):
+    """Return a human explanation when herdr's reply is an API error rather than data.
+
+    The CLI answers with a JSON envelope, and an unreachable/mismatched server still exits 0 with
+    an {"error": ...} body. Treating that as "the plugin is missing" would be a false negative: an
+    unanswerable question is not a NO. The common case is a version mismatch after `brew upgrade`
+    while the old server is still running, which no amount of reinstalling can fix — only a
+    server restart can, and that kills pane processes, so we must say so rather than guess.
+    """
+    if not out:
+        return "no response from herdr"
+    try:
+        err = json.loads(out).get("error")
+    except Exception:
+        return None
+    if not err:
+        return None
+    code = err.get("code", "error")
+    if code == "protocol_mismatch":
+        return ("herdr CLI is newer than the running server (%s). Restart the herdr server to "
+                "continue — note that stopping it exits pane processes." % code)
+    return "herdr API error: %s — %s" % (code, (err.get("message") or "").split("\n")[0])
+
+
 def plugin_registered():
+    """True / False / None, where None means 'could not ask the server'."""
     h = herdr_bin()
     if not h:
-        return False
+        return None
     rc, out = run([h, "plugin", "list"])
-    return rc == 0 and PLUGIN_ID in out
+    if server_error(out) or rc != 0:
+        return None
+    return PLUGIN_ID in out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -368,6 +395,13 @@ def cmd_install(args):
         die("herdr %s is too old; plugins need >= 0.7.0" % ".".join(map(str, v)))
     ok("herdr %s" % (".".join(map(str, v)) if v else "(version unknown)"))
 
+    # Fail fast if the server cannot answer: `plugin link` and `server reload-config` would both be
+    # no-ops, leaving configs written but nothing actually registered — a confusing half-state.
+    _rc, probe = run([herdr_bin(), "plugin", "list"])
+    problem = server_error(probe)
+    if problem and not args.dry_run:
+        die("%s\n       Nothing was changed. Re-run this after the restart." % problem)
+
     if not args.no_deps:
         head("Dependencies")
         install_deps(args.dry_run)
@@ -465,8 +499,15 @@ def cmd_doctor(_args):
             fails += 1
 
     head("Plugin")
-    if plugin_registered():
+    reg = plugin_registered()
+    if reg is True:
         ok("plugin '%s' registered with herdr" % PLUGIN_ID)
+    elif reg is None:
+        # Distinguish "cannot ask" from "answered no" — reinstalling cannot fix an unreachable
+        # server, so telling the user to reinstall here would send them down the wrong path.
+        _rc, out = run([herdr_bin(), "plugin", "list"]) if herdr_bin() else (1, "")
+        bad("cannot verify: %s" % (server_error(out) or "herdr did not answer"))
+        fails += 1
     else:
         bad("plugin '%s' not registered — run `herdr-extensions install`" % PLUGIN_ID)
         fails += 1
