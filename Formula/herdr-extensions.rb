@@ -10,7 +10,7 @@ class HerdrExtensions < Formula
   desc "Turn herdr into a terminal IDE: editor, LSP diagnostics, panels, live preview"
   homepage "https://github.com/vonzelle-vzt/herdr-extensions"
   url "https://github.com/vonzelle-vzt/herdr-extensions/archive/refs/tags/v0.10.0.tar.gz"
-  sha256 "e5db5cd2ec3a6b2fe52db683a53bb17f10a24d8a53a830d40d209b757ee8909b"
+  sha256 "eca412c1a4ef46f908737ba703cb74bd7f0145f5833039d9dfdc03f3a00f90fb"
   license "MIT"
 
   # Stdlib-only Python 3.9+, which is what macOS ships -- so no python dependency is declared and
