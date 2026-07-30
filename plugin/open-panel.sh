@@ -57,6 +57,24 @@ GIT=/usr/bin/git
 # instead of $HOME's dotfiles. Rendered by `herdr-extensions install --projects-root DIR`.
 PROJECTS_ROOT="@@PROJECTS_ROOT@@"
 
+# ============================ GEOMETRY POLICY — ONE SOURCE OF TRUTH ============================
+# These three numbers decide both "is a split possible at all?" (the viability guard below) and
+# "how wide should the panel be?" (the clamp at the bottom). They used to live in two places and
+# DISAGREED, which is the bug this block exists to prevent: the guard tested the RAW requested
+# width (88) while the clamp would have shrunk that same panel to fit (60 on a 109-column split).
+# So the guard sent the editor to its own tab on a geometry the clamp handles perfectly well —
+# rejecting a layout on a number the code never actually uses.
+#
+# The division of labour is now strict, and it is what keeps them from drifting apart again:
+#   * the GUARD answers a FLOOR question only — is there room for MIN_COLS + MIN_PEER? It never
+#     looks at the requested width, because the requested width is negotiable and the floor is not.
+#   * the CLAMP answers the sizing question — it alone owns MAX_FRAC and the ceilings.
+# Both read these variables; neither hardcodes a number. tests/check-sizing.py parses them straight
+# out of this file, so changing one here moves the test with it.
+MIN_COLS=56          # SpiceEdit minWidth(50) + tab bar/status margin, so the wall is never hit
+MIN_PEER=44          # below this the pane you split AWAY from stops being readable
+MAX_FRAC=0.55        # past this the panel is eating the agent, which defeats the layout
+
 panes_json="$("$herdr_bin" pane list 2>/dev/null || true)"
 
 # Resolve target pane/tab/cwd and the open/focus/close decision in one pass.
@@ -140,16 +158,21 @@ if [ -z "$proj" ]; then
 fi
 
 # ============================ IS A SPLIT EVEN VIABLE? ============================
-# A side-by-side needs enough room for BOTH panes, and on a narrow terminal it simply does not
-# exist. Observed on a 105-column window: herdr's sidebar takes 36, leaving 69 to split; the editor
-# claims its 56-column minimum and the agent is left with 13 — technically a split, practically
-# useless, and the agent is the pane you were reading.
+# A side-by-side needs enough room for BOTH panes, and on a genuinely narrow terminal it does not
+# exist at any width. Observed on a 105-column window: herdr's sidebar takes 36, leaving 69 to
+# split; the editor claims its 56-column minimum and the agent is left with 13 — technically a
+# split, practically useless, and the agent is the pane you were reading. THAT is what this guard
+# is for, and 69 still fails it below.
 #
-# Neither clamp can rescue that, because the two requirements genuinely conflict. So detect it
-# BEFORE opening and use a tab instead, which is what VS Code does when you shrink a window. Only
-# applies to a horizontal split with a column-based size; a vertical panel and a fractional size
-# are both left alone.
-MIN_PEER=44          # below this the pane you split AWAY from stops being readable
+# What it must NOT do is test the REQUESTED width. The request is a preference; the clamp shrinks
+# it to fit. Asking "can I fit 88?" made the fallback fire on every split from 100 to 131 columns
+# wide — a 109-column split is fine, the clamp puts the editor at 60 and leaves the agent 49 —
+# so the editor kept landing in its own tab on screens that could host it perfectly well.
+# The only genuinely impossible case is when the two FLOORS cannot coexist, so that is the whole
+# test: MIN_COLS for the panel, MIN_PEER for the pane we split away from.
+#
+# Only applies to a horizontal split with a column-based size; a vertical panel and a fractional
+# size are both left alone.
 if [ "$mode" = "split" ] && [ "$direction" = "right" ] && [ -n "$ratio" ]; then
   avail="$("$PY" - "$("$herdr_bin" pane edges --pane "${target:-}" 2>/dev/null)" <<'EOF' 2>/dev/null || true
 import json, sys
@@ -160,17 +183,14 @@ except Exception:
     pass
 EOF
 )"
-  # No width shortcut here. An earlier version skipped the check above 100 columns, which left a
-  # hole at exactly 100: the editor took 88 and the peer got 12, the very outcome this guards.
   if [ -n "$avail" ]; then
     case "$ratio" in
-      *.*) : ;;                      # a fraction, not columns — the arithmetic below would be wrong
+      *.*) : ;;                      # a fraction, not columns — this floor is in the wrong unit
       [0-9]*)
-        need=$((ratio < 56 ? 56 : ratio))
         # Only the editor has a tab variant to fall back to. Everything else is a bottom panel
         # (direction=down) and never reaches this branch, but be explicit rather than building an
         # entrypoint id by string concatenation that could name a pane the manifest does not have.
-        if [ "$((avail - need))" -lt "$MIN_PEER" ] && [ "$entrypoint" = "editor" ]; then
+        if [ "$avail" -lt "$((MIN_COLS + MIN_PEER))" ] && [ "$entrypoint" = "editor" ]; then
           mode="tab"
           entrypoint="editor-tab"
         fi
@@ -224,24 +244,30 @@ fi
 # a vertical (down) panel too.
 if [ -n "$ratio" ] && [ -n "$new_pane" ]; then
   edges_json="$("$herdr_bin" pane edges --pane "$new_pane" 2>/dev/null || true)"
-  move="$("$PY" - "$edges_json" "$new_pane" "$ratio" <<'EOF' 2>/dev/null || true
+  move="$("$PY" - "$edges_json" "$new_pane" "$ratio" "$MIN_COLS" "$MIN_PEER" "$MAX_FRAC" <<'EOF' 2>/dev/null || true
 import json, sys
 
 # SpiceEdit refuses to draw below 50 columns and its file tree is a fixed 30, so a panel sized as
 # a bare FRACTION is a trap: 0.40 of a 200-col screen is a comfortable 80, but 0.40 of a 120-col
 # laptop is 48 — under the wall, and the panel renders "Window too small — please resize".
 # So the requested size is a COLUMN COUNT (>=1), converted to a ratio against the actual split,
-# then clamped: never below the usable minimum, never more than MAX_FRAC of the screen.
+# then clamped: never below the usable minimum, never more than MAX_FRAC of the screen, and never
+# so wide that the pane we split away from drops under MIN_PEER.
+#
+# The requested width is a PREFERENCE, not a demand — this is the only place allowed to decide the
+# final number, and the viability guard above deliberately does not second-guess it. That is why a
+# 109-column split now yields a 60-column editor beside a 49-column agent instead of a fallback to
+# a separate tab.
 #
 # NOTE no apostrophes anywhere in this heredoc. bash 3.2 (what /bin/bash still is on macOS, and
 # what launchd PATH resolves) mis-parses a lone quote inside a heredoc nested in $( ), and the
 # whole script then fails to parse — silently, because herdr just sees the action do nothing.
 # A value below 1 is still accepted and taken as a literal fraction, for a vertical panel where
 # columns are the wrong unit.
-MIN_COLS = 56          # minWidth(50) + tab bar/status margin, so the wall is never hit
-MAX_FRAC = 0.55        # past this the panel is eating the agent, which defeats the layout
-
-edges_raw, pane_id, target = sys.argv[1:4]
+edges_raw, pane_id, target, min_cols, min_peer, max_frac = sys.argv[1:7]
+MIN_COLS = int(min_cols)     # minWidth(50) + tab bar/status margin, so the wall is never hit
+MIN_PEER = int(min_peer)     # the pane we split away from stays readable
+MAX_FRAC = float(max_frac)   # past this the panel is eating the agent, which defeats the layout
 try:
     lay = json.loads(edges_raw)["result"]["edges"]["layout"]
     me = next(p["rect"] for p in lay["panes"] if p["pane_id"] == pane_id)
@@ -268,7 +294,13 @@ try:
             # genuinely conflict (50 cols of a 80-col screen is already 63%, over MAX_FRAC), and
             # an oversized panel is merely annoying while an under-minimum one renders nothing
             # but "Window too small". Prefer usable. Capped at 0.9 so the agent never vanishes.
-            want = min(want / span, MAX_FRAC)
+            #
+            # Two ceilings, both required. MAX_FRAC is a share of the screen and MIN_PEER is an
+            # absolute column count, and neither implies the other: on a wide split MAX_FRAC binds
+            # first, while a hand-tuned MAX_FRAC closer to 1.0 would starve the peer without the
+            # second term. Taking the min of both means the requested width shrinks to fit rather
+            # than being refused, which is the whole reason the guard above can stay a floor test.
+            want = min(want / span, MAX_FRAC, (span - MIN_PEER) / float(span))
             want = max(want, min(MIN_COLS / span, 0.9))
 
         # `ratio` is the share belonging to the FIRST child, so a second-child panel that wants

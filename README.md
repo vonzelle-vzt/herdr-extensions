@@ -203,11 +203,38 @@ Anything else that needs to live *inside* the editor lives in
 ./bin/herdr-extensions install --dry-run
 ./tests/live-check.sh                # behavioral oracles against a running herdr
 ./tests/check-panels.sh              # 25 panel oracles — no server needed
+./tests/check-viability.sh           # split-vs-tab decision, against a stubbed herdr
 /usr/bin/python3 tests/check-sizing.py   # panel geometry, against a fixture
 ```
 
-The last two run entirely offline, which matters: they are the checks that catch the two regressions
-that shipped in v0.1.0, and they must work even when the herdr server is unreachable.
+The last three run entirely offline, which matters: they are the checks that catch the regressions
+that shipped in v0.1.0 and v0.4.0, and they must work even when the herdr server is unreachable.
+
+### Panel width, and why the editor sometimes gets its own tab
+
+Two numbers decide the layout, and they are declared once, in the `GEOMETRY POLICY` block of
+`plugin/open-panel.sh`: `MIN_COLS` (the narrowest the editor can still draw) and `MIN_PEER` (the
+narrowest the pane you split away from stays readable). `MAX_FRAC` then caps how much of the split a
+panel may take.
+
+The split of responsibility is deliberate and is what keeps the two from disagreeing:
+
+| | question | owns |
+|---|---|---|
+| **viability guard** | is a side-by-side possible *at all*? | `MIN_COLS + MIN_PEER` — a pure floor test |
+| **width clamp** | how wide, exactly? | `MAX_FRAC`, the peer ceiling, the requested width |
+
+The requested column count in the manifest (`88` for the editor) is a **preference**. The guard must
+never test it — v0.4.0 did, and refused a split whenever `avail - 88 < MIN_PEER`, which sent the
+editor to its own tab across a 32-column band (100–131) that the clamp handles perfectly well. On a
+145-column terminal herdr keeps 36 for its sidebar, leaving 109: the clamp puts the editor at 60 and
+the agent at 49, both comfortably over their floors. `tests/check-viability.sh` pins that band and
+`tests/check-sizing.py` pins the widths; both parse the constants out of the launcher, so retuning a
+number moves the tests with it.
+
+You will still get a tab below `MIN_COLS + MIN_PEER` columns of usable width — there, the two floors
+genuinely cannot coexist and a tab is the honest answer, the same thing VS Code does when you shrink
+a window.
 
 `bin/herdr-extensions` is stdlib-only Python targeting **3.9** (what macOS ships), so there is no
 `tomllib` — config edits are marker-delimited text injections, which is also why your comments and
