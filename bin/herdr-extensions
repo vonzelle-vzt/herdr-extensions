@@ -909,9 +909,15 @@ def cmd_doctor(_args=None):
         fails += 1
     manifest = os.path.join(PLUGIN_DST, "herdr-plugin.toml")
     if os.path.isfile(manifest):
-        body = open(manifest).read()
-        if "@@" in body:
-            bad("manifest still has unrendered placeholders")
+        # Ignore comments. The template documents its own @@-substitution in a comment, so a plain
+        # `"@@" in body` reported a correctly-rendered manifest as broken — a false FAIL that sends
+        # the user chasing a problem that does not exist, which is worse than no check at all.
+        # (Python 3.9 has no tomllib, hence line filtering rather than a real parse.)
+        live = [ln for ln in open(manifest).read().splitlines()
+                if not ln.lstrip().startswith("#")]
+        stale = [ln.strip() for ln in live if "@@" in ln]
+        if stale:
+            bad("manifest still has unrendered placeholders: %s" % stale[0][:70])
             fails += 1
         else:
             ok("manifest rendered with absolute paths")
