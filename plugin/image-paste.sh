@@ -30,11 +30,13 @@ note() { printf 'image-paste: %s\n' "$*" >&2; }
 
 print_only=0
 clipboard_only=0
+watch_mode=0
 args=()
 for a in "$@"; do
   case "$a" in
     --print) print_only=1 ;;
     --clipboard-only) clipboard_only=1 ;;
+    --watch) watch_mode=1 ;;
     --prune)
       days="${2:-14}"
       [ -d "$SHOT_DIR" ] || { note "nothing to prune"; exit 0; }
@@ -48,6 +50,71 @@ done
 set -- ${args[@]+"${args[@]}"}
 
 mkdir -p "$SHOT_DIR" 2>/dev/null || { note "cannot create $SHOT_DIR"; exit 1; }
+
+# --- watch mode ---------------------------------------------------------------------------------
+# WHY THIS EXISTS. herdr cannot receive a Finder drag-and-drop locally: its own config documents
+# `remote_image_paste` as "only active in herdr --remote", and there is no local equivalent. So
+# rather than explain that limitation to a user who just wants to send a picture, invert it --
+# watch the folders images actually land in, and the moment a new one appears, type its path to
+# the agent. Dragging the image to your Desktop becomes dragging it into the conversation.
+#
+# Polling, not fswatch: fswatch is a Homebrew binary that would be one more thing to install and
+# one more thing to be missing under launchd PATH. A 2-second poll over three directories costs
+# nothing and has no dependency.
+if [ "$watch_mode" = 1 ]; then
+  shot_loc="$(defaults read com.apple.screencapture location 2>/dev/null || true)"
+  watch_dirs=""
+  for d in "$shot_loc" "$HOME/Desktop" "$HOME/Downloads"; do
+    [ -n "$d" ] && [ -d "$d" ] && watch_dirs="$watch_dirs
+$d"
+  done
+  watch_dirs="$(printf '%s\n' "$watch_dirs" | grep -v "^$" | sort -u)"
+  if [ -z "$watch_dirs" ]; then
+    # Degrade, never refuse: a panel that exits the instant it opens shows the user nothing at all
+    # and reads as a broken keybinding. Say which folders were looked for and stay put.
+    echo "Images: nothing to watch."
+    echo
+    echo "Looked for the macOS screenshot folder, ~/Desktop and ~/Downloads; none of them exist."
+    echo "Create one of those, or pass paths explicitly:  image-paste.sh <file>"
+    exit 0
+  fi
+
+  echo "Watching for new images. Drop or save one into any of these and it goes to the agent:"
+  printf '%s\n' "$watch_dirs" | sed "s|^|  |"
+  echo
+  echo "Ctrl+C to stop."
+  echo
+
+  # Only files created AFTER the watcher starts. Without this marker the first tick would dump
+  # every image already sitting on the Desktop into the conversation.
+  marker="$(mktemp)"
+  trap 'rm -f "$marker"' EXIT
+  seen="$(mktemp)"
+  trap 'rm -f "$marker" "$seen"' EXIT
+
+  while :; do
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      find "$d" -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \
+        -o -iname "*.gif" -o -iname "*.webp" \) -newer "$marker" -print 2>/dev/null | while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        grep -qxF "$f" "$seen" 2>/dev/null && continue
+        printf '%s\n' "$f" >>"$seen"
+        # Let a large file finish being written before handing over a truncated path.
+        sleep 1
+        if "$0" "$f" >/dev/null 2>&1; then
+          echo "sent: $f"
+        else
+          echo "could not send: $f"
+        fi
+      done
+    done <<WATCHEOF
+$watch_dirs
+WATCHEOF
+    sleep 2
+  done
+fi
+
 img=""
 
 if [ $# -gt 0 ] && [ -f "$1" ]; then
@@ -114,7 +181,7 @@ import sys, json
 # Must match the [[panes]] titles in herdr-plugin.toml exactly. Oracle 23d derives its list from
 # that manifest and fails on any drift — it had to, because this set once named a 'Files' panel that
 # no longer exists while omitting 'Preview', making the Preview panel a legal target for a path.
-PANELS = {'Edit', 'Git', 'Problems', 'Search', 'TODO', 'Debug', 'Blame', 'Markdown', 'Preview', 'Tests', 'Review'}
+PANELS = {'Edit', 'Git', 'Problems', 'Search', 'TODO', 'Debug', 'Blame', 'Markdown', 'Preview', 'Tests', 'Images', 'Review'}
 try:
     panes = json.load(sys.stdin)['result']['panes']
 except Exception:

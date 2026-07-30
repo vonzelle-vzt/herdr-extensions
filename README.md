@@ -237,6 +237,7 @@ break, because there are no plugins.
 | `ctrl+b` `shift+u` | Tests — vitest / jest / pytest. |
 | `ctrl+b` `shift+a` | **Preview** — the dev server rendered inside a pane, refreshing itself. |
 | `ctrl+b` `shift+k` | **Review** — read the agent's diff, cite lines, send your notes back to it. |
+| `ctrl+b` `shift+i` | **Image watcher** — drop an image on your Desktop and it goes to the agent. |
 | `ctrl+b` `i` | **Paste an image** — clipboard screenshot, or the newest capture, typed as a path to the agent. |
 | `ctrl+b` `shift+l` / `shift+h` | Nudge the split divider right / left. |
 
@@ -274,6 +275,7 @@ that is absent.
 | **Debug** | Parses the repo's `.vscode/launch.json` — comments and trailing commas included, because it is JSONC — lists the configurations, and hands off to an installed adapter (`koan-debugger`, `debugger-cli`, `dlv`, `lldb-dap`, `tdb`). |
 | **Markdown** | `glow -s dark` on the active file. |
 | **Tests** | Detects vitest / jest / pytest from `package.json` or `pyproject.toml`. |
+| **Images** | Watches your screenshot folder, `~/Desktop` and `~/Downloads`, and types each new image's path to the agent pane. herdr **cannot take a Finder drag-and-drop locally** — its own config documents `remote_image_paste` as *"only active in herdr --remote"* — so rather than leave you without a way to show the agent a picture, this inverts the problem: dragging the image to your Desktop becomes dragging it into the conversation. |
 | **Review** | The agent's diff against your branch's merge-base, with line numbers. Type `path:line your note`, collect as many as you like, and one key sends them all back to the **agent pane** as a single message. Or type `e path:line` and **open that line in the editor to fix it yourself** — every other review plugin in the marketplace is read-only, so being able to edit from the review is the part nobody else has. And `p` pushes the branch and opens a **draft** pull request with your notes as the body, which is the third verb of the loop: fix it, hand it back to the agent, or send it out to a human. |
 | **Git** | `lazygit`. Interactive staging alone is worth the panel — plus an **AI commit message** command that drafts a subject line from the staged diff with your local `claude` CLI. |
 

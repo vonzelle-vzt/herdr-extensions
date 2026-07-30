@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -87,6 +87,7 @@ KEYS = [
     ("prefix+i", "paste-image", "paste an image/screenshot path to the agent"),
     # prefix+shift+c is free against herdr's 39 reserved bindings; prefix+r and prefix+shift+r are
     # BOTH taken (prefix+r is herdr's only resize binding) so neither was an option here.
+    ("prefix+shift+i", "open-images", "Image watcher: new images on Desktop/Downloads go to the agent"),
     ("prefix+shift+k", "open-review", "Review panel: comment on the agent's diff and send it back"),
     ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
     ("prefix+shift+h", "resize-narrower", "move the split divider left one step"),

@@ -9,7 +9,7 @@
 class HerdrExtensions < Formula
   desc "Turn herdr into a terminal IDE: editor, LSP diagnostics, panels, live preview"
   homepage "https://github.com/vonzelle-vzt/herdr-extensions"
-  url "https://github.com/vonzelle-vzt/herdr-extensions/archive/refs/tags/v0.12.0.tar.gz"
+  url "https://github.com/vonzelle-vzt/herdr-extensions/archive/refs/tags/v0.13.0.tar.gz"
   sha256 "ba2d110dc263ed7d74bb49ed049c9598e994061d6646e99fb1af5064d57d55be"
   license "MIT"
 

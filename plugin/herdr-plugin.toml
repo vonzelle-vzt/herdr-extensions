@@ -22,7 +22,7 @@
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
 id = "herdr-extensions"
 name = "herdr-extensions"
-version = "0.12.0"
+version = "0.13.0"
 description = "Tiny VS Code for herdr: editor + lazygit + problems/search/todo/blame/markdown/tests panels."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
@@ -119,6 +119,20 @@ id = "review"
 title = "Review"
 placement = "split"
 command = ["bash", "review"]
+
+# Images watches the folders pictures actually land in and types each new one to the agent. herdr
+# cannot take a Finder drag-and-drop locally -- its own config documents remote_image_paste as
+# "only active in herdr --remote" -- so rather than leave the user without a way to send a picture,
+# this inverts the problem: drop the image on your Desktop and it arrives in the conversation.
+# Small pane; it prints one line per image and otherwise sits quiet.
+[[panes]]
+id = "images"
+title = "Images"
+placement = "split"
+# Straight to the watcher: this is a long-running daemon, not a print-then-wait panel, so it does
+# NOT live in libexec/ -- everything there is held to the active-file panel contract and is expected
+# to terminate, and a watcher that terminates is not a watcher.
+command = ["bash", "image-paste.sh", "--watch"]
 
 # ---------------------------------------------------------------------------------------------
 # Actions. open-panel.sh args:
@@ -254,6 +268,13 @@ platforms = ["linux", "macos"]
 title = "Tests panel"
 description = "Toggle the repo's vitest/jest/pytest run in a split below the current pane."
 command = ["bash", "open-panel.sh", "tests", "Tests", "split", "down", "key", "no", "0.35"]
+
+[[actions]]
+id = "open-images"
+platforms = ["macos"]
+title = "Image watcher"
+description = "Watch Desktop/Downloads/screenshots and type each new image path to the agent, below the current pane."
+command = ["bash", "open-panel.sh", "images", "Images", "split", "down", "key", "no", "0.25"]
 
 [[actions]]
 id = "open-review"
