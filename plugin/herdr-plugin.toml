@@ -22,7 +22,7 @@
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
 id = "herdr-extensions"
 name = "herdr-extensions"
-version = "0.3.0"
+version = "0.4.0"
 description = "Tiny VS Code for herdr: editor + lazygit + problems/search/todo/blame/markdown/tests panels."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
@@ -78,6 +78,12 @@ id = "todo"
 title = "TODO"
 placement = "split"
 command = ["bash", "todo"]
+
+[[panes]]
+id = "debug"
+title = "Debug"
+placement = "split"
+command = ["bash", "debug"]
 
 [[panes]]
 id = "blame"
@@ -160,6 +166,16 @@ platforms = ["linux", "macos"]
 title = "TODO panel"
 description = "Toggle a TODO/FIXME/HACK/XXX scan of the repo in a split below the current pane."
 command = ["bash", "open-panel.sh", "todo", "TODO", "split", "down", "key", "no", "0.35"]
+
+# The debugger is the single most-cited thing people lose moving off VS Code. This panel does not
+# implement a debug adapter client — it finds an installed one, reuses the repo .vscode/launch.json,
+# and hands off. Writing a DAP client is months of work for a worse result than koan-debugger.
+[[actions]]
+id = "open-debug"
+platforms = ["linux", "macos"]
+title = "Debug panel"
+description = "Show launch configurations and hand off to an installed debug adapter."
+command = ["bash", "open-panel.sh", "debug", "Debug", "split", "down", "key", "no", "0.45"]
 
 [[actions]]
 id = "open-blame"

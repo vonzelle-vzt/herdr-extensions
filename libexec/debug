@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Debug panel — the single most-cited thing people lose moving from VS Code to a terminal.
+#
+# This deliberately does NOT implement a debug adapter client. Writing one is months of work, and
+# there are already good terminal DAP clients; the value we add is finding the right one, aiming it
+# at the right target, and reusing the launch configuration the user already has.
+#
+# Resolution order for the target, most specific first:
+#   1. .vscode/launch.json in the repo  — reuse what VS Code already knows about this project
+#   2. the active file from the editor  — debug what you are looking at
+#   3. the repo root                    — last resort, and we say so
+#
+# Absolute paths throughout: the herdr server execs this under launchd's minimal PATH
+# (/usr/bin:/bin:/usr/sbin:/sbin), so a bare binary name fails to spawn with no useful error.
+# NOTE no apostrophes inside any heredoc below — /bin/bash on macOS is still 3.2.57 and mis-parses
+# a lone quote inside a heredoc nested in $( ), which breaks the whole script silently.
+set -uo pipefail
+
+GIT=/usr/bin/git
+PY=/usr/bin/python3
+ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+# NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so
+# bash collapses runs of it and strips leading/trailing fields — with no file open the
+# payload starts with an empty field and every value silently shifts left, putting the line
+# number into the filename variable. \x1f is non-whitespace, so empty fields are preserved.
+IFS=$'\x1f' read -r active_file active_line active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print("\x1f".join([d.get("file") or "", str(d.get("line") or 1), d.get("root") or ""]))
+EOF
+)"
+
+repo="$active_root"
+if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+  base="${active_file:-$PWD}"
+  dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
+  repo="$("$GIT" -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$repo" ] || repo="$dir"
+fi
+
+find_bin() {
+  for d in /opt/homebrew/bin /usr/local/bin "$HOME/.cargo/bin" "$HOME/.local/bin" "$HOME/go/bin" /usr/bin; do
+    if [ -x "$d/$1" ]; then
+      printf '%s' "$d/$1"
+      return 0
+    fi
+  done
+  return 1
+}
+
+echo "Debug — $repo"
+[ -n "$active_file" ] && echo "active: $active_file:$active_line"
+echo
+
+# ---------------------------------------------------------------------------------------------
+# launch.json is the interesting part: it is how a project already describes what "run this" means,
+# and honouring it is what makes this feel like VS Code rather than like a different tool.
+# ---------------------------------------------------------------------------------------------
+LAUNCH="$repo/.vscode/launch.json"
+if [ -f "$LAUNCH" ]; then
+  echo "launch configurations (.vscode/launch.json):"
+  "$PY" - "$LAUNCH" <<'EOF'
+import json, re, sys
+
+# launch.json is JSONC: VS Code allows comments and trailing commas, which json.load rejects.
+# Stripping them is not merely convenient — nearly every real launch.json has a comment in it.
+raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+raw = re.sub(r"/\*.*?\*/", "", raw, flags=re.S)
+raw = re.sub(r"(^|[^:])//.*$", r"\1", raw, flags=re.M)
+raw = re.sub(r",(\s*[}\]])", r"\1", raw)
+try:
+    cfgs = json.loads(raw).get("configurations", [])
+except Exception as exc:
+    print("   could not parse: %s" % exc)
+    cfgs = []
+for i, c in enumerate(cfgs, 1):
+    print("   %d. %-28s type=%-10s request=%s"
+          % (i, c.get("name", "(unnamed)"), c.get("type", "?"), c.get("request", "?")))
+    for key in ("program", "module", "args", "cwd", "port"):
+        if c.get(key):
+            print("      %-8s %s" % (key, c[key]))
+if not cfgs:
+    print("   (no configurations)")
+EOF
+  echo
+else
+  echo "no .vscode/launch.json in this repo"
+  echo
+fi
+
+# ---------------------------------------------------------------------------------------------
+# Which debugger to hand off to. koan-debugger reads launch.json directly and has a real TUI, so
+# it is preferred; debugger-cli keeps a session alive across invocations and emits structured
+# output, which is what makes it drivable by the agent in the next pane rather than only by a human.
+# ---------------------------------------------------------------------------------------------
+koan="$(find_bin koan-debugger || true)"
+dcli="$(find_bin debugger || true)"
+dlv="$(find_bin dlv || true)"
+lldbdap="$(find_bin lldb-dap || true)"
+tdb="$(find_bin tdb || true)"
+
+echo "debug adapters on this machine:"
+found=0
+for pair in "koan-debugger:$koan" "debugger-cli:$dcli" "delve (dlv):$dlv" "lldb-dap:$lldbdap" "tdb:$tdb"; do
+  name="${pair%%:*}"
+  path="${pair#*:}"
+  if [ -n "$path" ]; then
+    echo "   installed   $name  ->  $path"
+    found=$((found + 1))
+  else
+    echo "   missing     $name"
+  fi
+done
+echo
+
+if [ "$found" -eq 0 ]; then
+  cat <<'EOF'
+Nothing to debug with yet. Install one:
+
+   cargo install koan-debugger     TUI, reads .vscode/launch.json, Node + LLDB + Delve
+   cargo install debugger-cli      single binary, keeps sessions alive, JSON output for agents
+   uv tool install textual-debugger    Python and C/C++, full TUI
+   go install github.com/go-delve/delve/cmd/dlv@latest    Go
+
+Then reopen this panel.
+EOF
+else
+  if [ -n "$koan" ]; then
+    echo "Starting koan-debugger in $repo ..."
+    echo
+    cd "$repo" && exec "$koan"
+  fi
+  echo "koan-debugger is not installed, so there is no TUI to hand off to."
+  echo "Drive the session from the agent pane instead, for example:"
+  echo
+  [ -n "$dcli" ] && {
+    echo "   $dcli setup lldb            # or python / go / gdb"
+    echo "   $dcli launch <binary>"
+    echo "   $dcli break ${active_file:-<file>}:${active_line}"
+    echo "   $dcli continue && $dcli vars --json"
+  }
+  [ -n "$dlv" ] && echo "   $dlv debug            # Go, from $repo"
+  [ -n "$tdb" ] && echo "   $tdb ${active_file:-<script.py>}"
+fi
+
+echo
+echo "Press any key to close..."
+# `|| true` is load-bearing: with stdin at EOF (which is how the test harness and any
+# non-interactive run see it) read returns non-zero, and as the last command that becomes the
+# script exit status — making a panel that worked perfectly look like it failed.
+IFS= read -r -n1 -s _ || true

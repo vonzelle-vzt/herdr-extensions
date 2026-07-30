@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 HOME = os.path.expanduser("~")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +48,7 @@ SKIN_UI_END = "# <<< herdr-extensions skin (ui) <<<"
 
 # Panel scripts shipped in libexec/ that get copied alongside open-panel.sh into the rendered
 # plugin directory (see render_plugin()) and wired up as [[panes]] + [[actions]] in the manifest.
-PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests"]
+PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests", "debug"]
 
 # Keybindings we inject: (key, action id, human description).
 #
@@ -73,6 +73,7 @@ KEYS = [
     ("prefix+t", "open-todo", "TODO/FIXME/HACK/XXX panel, below"),
     ("prefix+shift+b", "open-blame", "Blame panel for the active file, below"),
     ("prefix+shift+v", "open-markdown", "Markdown preview (glow) of the active file, below (VS Code shift+cmd+V)"),
+    ("prefix+d", "open-debug", "Debug panel: launch configs + adapter handoff (VS Code ctrl+shift+D)"),
     ("prefix+shift+u", "open-tests", "Tests panel: vitest/jest/pytest, below"),
 ]
 
