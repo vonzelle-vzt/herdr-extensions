@@ -430,19 +430,57 @@ is the git UI. Gluing the three together correctly takes about ten steps, severa
 
 ## Install
 
+**Homebrew** — this repo is its own tap:
+
 ```bash
-# Homebrew (this repo is its own tap)
 brew tap vonzelle-vzt/herdr-extensions https://github.com/vonzelle-vzt/herdr-extensions
 brew install vonzelle-vzt/herdr-extensions/herdr-extensions
 herdr-extensions install
-
-# or, without Homebrew
-curl -fsSL https://raw.githubusercontent.com/vonzelle-vzt/herdr-extensions/main/install.sh | sh
-herdr-extensions install
+herdr-extensions doctor        # confirm every moving part
 ```
 
-Requires **herdr ≥ 0.7.0**. `install` will install anything missing — the editor, `lazygit`, a Nerd
-Font, `prettier` — or run it with `--no-deps` to manage those yourself.
+**Without Homebrew** — clones to `~/.local/share/herdr-extensions` and links into `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vonzelle-vzt/herdr-extensions/main/install.sh | sh
+herdr-extensions install
+herdr-extensions doctor
+```
+
+`brew install` only puts the CLI in place. **`herdr-extensions install` is the step that does the
+work**: it installs whatever is missing — the editor, `lazygit`, a Nerd Font, `prettier` — registers
+the plugin, and injects the keybindings. Run it with `--no-deps` to manage the dependencies yourself.
+
+Requires **herdr ≥ 0.7.0**. herdr is deliberately *not* a Homebrew dependency, because
+`herdr-extensions doctor` reports a missing or too-old herdr far more usefully than brew's resolver
+would.
+
+<details>
+<summary>Both paths are verified against a real install, not just documented</summary>
+
+Every command above has been run end to end, because all three install paths were broken at once and
+none of the breakage was reachable from a development checkout:
+
+| Checked | Result |
+| --- | --- |
+| `brew audit --strict --online` | clean |
+| `brew fetch` | tarball checksum verified |
+| `brew install` | keg built; `bin/` → `Cellar/bin/` → `libexec/bin/` symlink chain resolves |
+| `herdr-extensions install --dry-run` from the keg | exit 0 |
+| `brew test` | passes |
+| `curl … install.sh \| sh` | clones, links into `~/.local/bin`, exit 0 |
+
+What was broken: the editor step tapped `cloudmanic/spice-edit` (upstream, which ships `spice-edit.rb`
+only) while installing from `vonzelle-vzt/herdr-edit`, a tap it never added; this repo had no
+`Formula/` directory at all despite documenting `brew install`; and `REPO` was derived with
+`abspath(__file__)`, which does not follow symlinks — so *both* install paths, which each put a
+symlink on `PATH`, failed with `package file missing: …/plugin/herdr-plugin.toml`.
+
+`version` kept working throughout, because it needs no package files. That is exactly why running
+`./bin/herdr-extensions` from a checkout never revealed any of it. `tests/check-deps.sh` now pins all
+of it, including invocation through a symlink.
+
+</details>
 
 ### The editor
 
