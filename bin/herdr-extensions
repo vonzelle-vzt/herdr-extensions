@@ -26,7 +26,12 @@ import sys
 VERSION = "0.9.0"
 
 HOME = os.path.expanduser("~")
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
+# `ln -sf` into ~/.local/bin, and the Homebrew formula symlinks from libexec -- and abspath does
+# not follow symlinks, so REPO resolved to the symlink's own directory. Every command that needs a
+# package file then died with 'package file missing: <that dir>/plugin/herdr-plugin.toml'. Only
+# running ./bin/herdr-extensions from a checkout ever worked.
+REPO = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 PLUGIN_ID = "herdr-extensions"
 HERDR_CFG_DIR = os.path.join(HOME, ".config", "herdr")

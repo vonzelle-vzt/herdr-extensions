@@ -20,11 +20,11 @@ class HerdrExtensions < Formula
 
   def install
     libexec.install "bin", "plugin", "libexec", "skins"
-    (bin/"herdr-extensions").write <<~SH
-      #!/bin/sh
-      exec "#{libexec}/bin/herdr-extensions" "\"
-    SH
-    chmod 0755, bin/"herdr-extensions"
+    # A SYMLINK, not a shell shim. The CLI resolves its package root with
+    # realpath(__file__), so a symlink lands on libexec correctly -- and the shim this
+    # replaced was mangled through two layers of heredoc escaping into `exec "..." "\"`,
+    # which silently swallowed every argument.
+    bin.install_symlink libexec/"bin/herdr-extensions"
     doc.install "README.md", "SPEC.md", "UPSTREAM.md", "CLAUDE.md"
   end
 
@@ -41,6 +41,6 @@ class HerdrExtensions < Formula
   end
 
   test do
-    assert_match "herdr-extensions", shell_output("#{bin}/herdr-extensions --help 2>&1", 0)
+    assert_match "herdr-extensions", shell_output("#{bin}/herdr-extensions --help 2>&1")
   end
 end
