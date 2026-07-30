@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -87,6 +87,7 @@ KEYS = [
     ("prefix+i", "paste-image", "paste an image/screenshot path to the agent"),
     # prefix+shift+c is free against herdr's 39 reserved bindings; prefix+r and prefix+shift+r are
     # BOTH taken (prefix+r is herdr's only resize binding) so neither was an option here.
+    ("prefix+shift+j", "open-project", "Open a project: re-root the editor and this space on a repo"),
     ("prefix+shift+i", "open-images", "Image watcher: new images on Desktop/Downloads go to the agent"),
     ("prefix+shift+k", "open-review", "Review panel: comment on the agent's diff and send it back"),
     ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
@@ -452,6 +453,14 @@ def render_plugin(dry, projects_root):
     if not os.path.isfile(src_img):
         die("package file missing: %s" % src_img)
     imgpaste = open(src_img).read().replace("@@HERDR@@", which("herdr") or "herdr")
+    # The project opener is a PICKER over PROJECTS_ROOT, not a file-scoped panel, so it lives in
+    # plugin/ rather than libexec/ -- everything there is held to the active-file panel contract.
+    src_project = os.path.join(REPO, "plugin", "project.sh")
+    projectsh = (open(src_project).read()
+                 .replace("@@HERDR@@", which("herdr") or "herdr")
+                 .replace("@@GIT@@", which("git") or "/usr/bin/git")
+                 .replace("@@FZF@@", which("fzf") or "/nonexistent/fzf")
+                 .replace("@@PROJECTS_ROOT@@", projects_root))
 
     if dry:
         act("would write %s (spiceedit=%s, lazygit=%s, %d panel scripts)"
@@ -462,7 +471,7 @@ def render_plugin(dry, projects_root):
     changed = False
     files = [("herdr-plugin.toml", manifest, 0o644), ("open-panel.sh", launcher, 0o755),
              ("resize-pane.sh", resizer, 0o755),
-             ("image-paste.sh", imgpaste, 0o755)]
+             ("image-paste.sh", imgpaste, 0o755), ("project.sh", projectsh, 0o755)]
     # Panel scripts are copied verbatim EXCEPT for the same absolute-path templating the manifest
     # gets: the preview panel shells out to chafa and Chrome, and under launchd's PATH neither a bare
     # `chafa` nor a bare `chrome` resolves. Substitution is applied to every panel so there is one

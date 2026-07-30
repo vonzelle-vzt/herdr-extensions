@@ -16,7 +16,7 @@ herdr-extensions install
 ```
 
 That single command installs **everything** — the editor, `lazygit`, a Nerd Font, `prettier` — then
-registers twelve panels, injects the keybindings, and checks them against herdr's own so nothing of
+registers thirteen panels, injects the keybindings, and checks them against herdr's own so nothing of
 yours breaks. There is no second step and no companion package to go and fetch.
 
 Inline diagnostics, a real editor panel, source control, search, problems, a debugger, a live
@@ -30,7 +30,7 @@ agents in a terminal, with a session that survives a dropped SSH connection. It 
 but no editor, no source-control UI, and no diagnostics.
 
 **herdr-extensions is the IDE half.** It turns a herdr session into something shaped like VS Code —
-file tree and editor on the left, agent on the right, twelve panels a keypress away — while staying a
+file tree and editor on the left, agent on the right, thirteen panels a keypress away — while staying a
 terminal, so the whole thing still works over SSH and survives a disconnect.
 
 ### Who it is for
@@ -85,9 +85,9 @@ You install one thing. It brings the rest:
       ┌───────────────────────┼───────────────────────┐
       │                       │                       │
       ▼                       ▼                       ▼
- registers a           installs the            injects 15
+ registers a           installs the            injects 17
  herdr plugin          dependencies            keybindings
- (12 panels)           you don't have          (collision-checked
+ (13 panels)           you don't have          (collision-checked
       │                       │                 against herdr's 39)
       │                       ├─ herdr-edit ── the editor + LSP
       │                       ├─ lazygit ───── source control
@@ -111,7 +111,7 @@ Layers, and who owns what:
 | Layer | Owns | Provided by |
 | --- | --- | --- |
 | Session | workspaces, tabs, panes, survives SSH drop | **herdr** (third-party, unpatched) |
-| IDE | 12 panels, layout, keybindings, skin, installer | **this repo** (original work) |
+| IDE | 13 panels, layout, keybindings, skin, installer | **this repo** (original work) |
 | Editing | buffer, rendering, LSP, word wrap, file tree | **herdr-edit** (installed for you) |
 | Tools | git UI, search, typecheck, lint, tests, preview | lazygit, ripgrep, tsc, eslint, ruff, vitest, Chrome |
 
@@ -237,6 +237,7 @@ break, because there are no plugins.
 | `ctrl+b` `shift+u` | Tests — vitest / jest / pytest. |
 | `ctrl+b` `shift+a` | **Preview** — the dev server rendered inside a pane, refreshing itself. |
 | `ctrl+b` `shift+k` | **Review** — read the agent's diff, cite lines, send your notes back to it. |
+| `ctrl+b` `shift+j` | **Open a project** — pick a repo; the editor *and* this space re-root on it. |
 | `ctrl+b` `shift+i` | **Image watcher** — drop an image on your Desktop and it goes to the agent. |
 | `ctrl+b` `i` | **Paste an image** — clipboard screenshot, or the newest capture, typed as a path to the agent. |
 | `ctrl+b` `shift+l` / `shift+h` | Nudge the split divider right / left. |
@@ -275,6 +276,7 @@ that is absent.
 | **Debug** | Parses the repo's `.vscode/launch.json` — comments and trailing commas included, because it is JSONC — lists the configurations, and hands off to an installed adapter (`koan-debugger`, `debugger-cli`, `dlv`, `lldb-dap`, `tdb`). |
 | **Markdown** | `glow -s dark` on the active file. |
 | **Tests** | Detects vitest / jest / pytest from `package.json` or `pyproject.toml`. |
+| **Project** | A new herdr space starts in `$HOME`, so the editor that opens with it has no project to show — you then start an agent, `cd` into a repo, and the editor is still pointed somewhere else. This picks a repo, **closes and reopens the editor rooted at it** so the tree shows your files, and **renames the space after the repo** so the auto-open matcher resolves it unaided next time. Use it once per space and you stop needing it. |
 | **Images** | Watches your screenshot folder, `~/Desktop` and `~/Downloads`, and types each new image's path to the agent pane. herdr **cannot take a Finder drag-and-drop locally** — its own config documents `remote_image_paste` as *"only active in herdr --remote"* — so rather than leave you without a way to show the agent a picture, this inverts the problem: dragging the image to your Desktop becomes dragging it into the conversation. |
 | **Review** | The agent's diff against your branch's merge-base, rendered with **`delta`** when you have it — syntax highlighting and word-level intra-line marks, with line numbers kept on because the whole panel is built around citing one. Falls back to a built-in renderer that still prints citable numbers, so `delta` stays optional. Type `path:line your note`, collect as many as you like, and one key sends them all back to the **agent pane** as a single message. Or type `e path:line` and **open that line in the editor to fix it yourself** (or open the diff in the editor with `ctrl+b shift+e` then `Esc o`, and press `Esc e` on any line to jump to it — cursor selection rather than typing a reference) — every other review plugin in the marketplace is read-only, so being able to edit from the review is the part nobody else has. And `p` pushes the branch and opens a **draft** pull request with your notes as the body, which is the third verb of the loop: fix it, hand it back to the agent, or send it out to a human. |
 | **Git** | `lazygit`. Interactive staging alone is worth the panel — plus an **AI commit message** command that drafts a subject line from the staged diff with your local `claude` CLI. |
