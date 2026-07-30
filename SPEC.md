@@ -148,8 +148,8 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 A GitHub repo that is its own Homebrew tap (the pattern both `spice-edit` and `herdr-plus` use):
 
 ```
-brew tap <owner>/herdr-extensions https://github.com/<owner>/herdr-extensions
-brew install <owner>/herdr-extensions/herdr-extensions
+brew tap vonzelle-vzt/herdr-extensions https://github.com/vonzelle-vzt/herdr-extensions
+brew install vonzelle-vzt/herdr-extensions/herdr-extensions
 herdr-extensions install
 ```
 

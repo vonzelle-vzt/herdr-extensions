@@ -1,13 +1,13 @@
 #!/bin/sh
 # Bootstrap herdr-extensions without Homebrew:
-#   curl -fsSL https://raw.githubusercontent.com/<owner>/herdr-extensions/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/vonzelle-vzt/herdr-extensions/main/install.sh | sh
 #
 # Clones (or updates) the package into ~/.local/share/herdr-extensions and symlinks the CLI onto
 # ~/.local/bin. Deliberately does NOT run `herdr-extensions install` for you — piping a script from the
 # internet straight into a config-mutating installer is a bad habit to encourage. Run it yourself.
 set -eu
 
-REPO="${HERDR_EXTENSIONS_REPO:-https://github.com/OWNER/herdr-extensions.git}"
+REPO="${HERDR_EXTENSIONS_REPO:-https://github.com/vonzelle-vzt/herdr-extensions.git}"
 DEST="${HERDR_EXTENSIONS_DIR:-$HOME/.local/share/herdr-extensions}"
 BIN="$HOME/.local/bin"
 

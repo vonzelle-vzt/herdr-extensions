@@ -161,6 +161,31 @@ def herdr_bin():
     return which("herdr")
 
 
+# The editor binary, preferring our fork.
+#
+# spiceedit-vzt is cloudmanic/spice-edit plus the things a VS Code user notices missing: LSP
+# diagnostics, a file tree that respects .gitignore, find AND replace, auto-closing pairs, a start
+# page instead of "No file open", a layout that degrades in a narrow pane instead of refusing to
+# draw, and the active-file publishing every panel in this package reads.
+#
+# Upstream `spiceedit` still works and is the documented fallback — the panels degrade to the repo
+# root without active.json, and everything except diagnostics behaves the same. Preferring the fork
+# rather than requiring it means neither install is broken by the other.
+EDITOR_CANDIDATES = ("spiceedit-vzt", "spiceedit")
+
+
+def editor_bin():
+    for name in EDITOR_CANDIDATES:
+        p = which(name)
+        if p:
+            return p
+    return None
+
+
+def editor_is_fork():
+    return which("spiceedit-vzt") is not None
+
+
 def herdr_version():
     h = herdr_bin()
     if not h:
@@ -384,9 +409,9 @@ def render_plugin(dry, projects_root):
     the correct absolute path differs per machine: /opt/homebrew on Apple Silicon, /usr/local on
     Intel, /usr/bin on Linux.
     """
-    spice = which("spiceedit")
+    spice = editor_bin()
     lazy = which("lazygit")
-    missing = [n for n, p in (("spiceedit", spice), ("lazygit", lazy)) if not p]
+    missing = [n for n, p in (("spiceedit-vzt or spiceedit", spice), ("lazygit", lazy)) if not p]
     if missing:
         die("cannot render plugin, missing: %s (run `herdr-extensions install` without --no-deps)"
             % ", ".join(missing))
@@ -682,8 +707,8 @@ def reload_config_best_effort():
 def install_deps(dry):
     brew = which("brew")
     steps = []
-    if not which("spiceedit"):
-        steps.append(("spiceedit", ["brew", "install", "cloudmanic/spice-edit/spice-edit"],
+    if not editor_bin():
+        steps.append(("spiceedit-vzt", ["brew", "install", "vonzelle-vzt/spice-edit-vzt/spice-edit-vzt"],
                       ["brew", "tap", "cloudmanic/spice-edit",
                        "https://github.com/cloudmanic/spice-edit"]))
     if not which("lazygit"):
@@ -861,7 +886,7 @@ def cmd_doctor(_args=None):
         ok("herdr %s at %s" % (".".join(map(str, v)) if v else "?", herdr_bin()))
 
     head("Binaries (must be absolute — the herdr server runs under launchd's minimal PATH)")
-    for name in ("spiceedit", "lazygit"):
+    for name in (EDITOR_CANDIDATES[0] if editor_is_fork() else EDITOR_CANDIDATES[1], "lazygit"):
         p = which(name)
         if p:
             ok("%-10s %s" % (name, p))
