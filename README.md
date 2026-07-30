@@ -97,6 +97,23 @@ has a minimum width below which it refuses to draw. Panels are sized in columns 
 neither end is reachable. If you are on upstream `spiceedit`, install
 [`herdr-edit`](https://github.com/vonzelle-vzt/herdr-edit) — its layout degrades instead of refusing.
 
+**The editor panel opens but shows no file tree.** The panel is narrower than the editor's tree
+threshold. Upstream `spiceedit` hides its tree below 76 columns, which switches the explorer off in
+exactly the place it earns its keep — a split beside an agent, where the pane is 60-odd columns.
+[`herdr-edit`](https://github.com/vonzelle-vzt/herdr-edit) narrows the tree toward 18 columns instead
+and only hides it below 42. `./tests/live-check.sh` checks this directly (ORACLE 19) by reading the
+pane rather than trusting its width.
+
+**The editor opened in its own tab instead of beside my agent.** Your layout is under
+`MIN_COLS + MIN_PEER` usable columns, so a side-by-side cannot give both panes a readable width. Note
+that herdr's own sidebar can be 36 of them — `prefix+b` collapses it and usually resolves this
+outright. Everything above that floor splits; if you see a tab above it, that is a bug.
+
+**A project opened with no editor at all.** The workspace is rooted at `$HOME` (a plain
+`herdr workspace create` with no `--cwd` does this) and its label matched no single repo under
+`PROJECTS_ROOT`. Auto-open stays silent rather than rooting a file tree in your home directory. Give
+the workspace a label matching the project directory, or create it with `--cwd`.
+
 **No diagnostics.** They need a language server *and* `herdr-edit`. Upstream `spiceedit` has no LSP
 client. `doctor` reports which editor it found.
 
@@ -124,6 +141,10 @@ is the git UI. Gluing the three together correctly takes about ten steps, severa
 - sizes each panel in **columns**, not as a fraction — `herdr plugin pane open` has no `--ratio`, so
   every plugin panel otherwise opens at a hard 50/50, and the editor has a minimum width below which
   it refuses to draw at all
+- decides split-vs-tab from the **floors** rather than the requested width, and lifts the editor to a
+  width that can actually show a file tree whenever the split can host one beside a readable agent
+- falls back to the **workspace label** to find your repo when the pane is rooted at `$HOME`, so a
+  workspace called `affiliate crm` opens `affiliate-crm-fintech` instead of nothing at all
 
 ## Install
 
@@ -203,11 +224,62 @@ Anything else that needs to live *inside* the editor lives in
 ./bin/herdr-extensions install --dry-run
 ./tests/live-check.sh                # behavioral oracles against a running herdr
 ./tests/check-panels.sh              # 25 panel oracles — no server needed
+./tests/check-viability.sh           # split-vs-tab decision, against a stubbed herdr
+./tests/check-project-resolve.sh     # which repo a workspace opens, against a stubbed herdr
 /usr/bin/python3 tests/check-sizing.py   # panel geometry, against a fixture
 ```
 
-The last two run entirely offline, which matters: they are the checks that catch the two regressions
-that shipped in v0.1.0, and they must work even when the herdr server is unreachable.
+The last four run entirely offline, which matters: they are the checks that catch the regressions
+that shipped in v0.1.0 and v0.4.0, and they must work even when the herdr server is unreachable.
+
+### Which project the panel opens
+
+On `workspace.created` the editor opens automatically, so a project comes up VS Code-shaped with no
+keypress. Resolution order:
+
+1. the focused pane's cwd, widened to `git rev-parse --show-toplevel` — the repo root, like VS Code;
+2. failing that, the **workspace label** matched against `PROJECTS_ROOT` — slugified, an exact
+   directory match first, then a *unique* prefix match, and it must be a git repo;
+3. failing that: auto-open does nothing, a keypress falls back to `PROJECTS_ROOT`.
+
+Step 2 exists because `herdr workspace create` and herdr-plus Projects both leave the root pane at
+`$HOME` unless you pass `--cwd`, and the launcher refuses to root a file tree at `$HOME` — that is
+the dotfile-soup problem. So a workspace labelled `affiliate crm` used to get **no editor at all**;
+it now opens `affiliate-crm-fintech`. Ambiguity is never guessed: two candidate repos means nothing
+opens, because the wrong project is worse than none.
+
+### Panel width, and why the editor sometimes gets its own tab
+
+Two numbers decide the layout, and they are declared once, in the `GEOMETRY POLICY` block of
+`plugin/open-panel.sh`: `MIN_COLS` (the narrowest the editor can still draw) and `MIN_PEER` (the
+narrowest the pane you split away from stays readable). `MAX_FRAC` then caps how much of the split a
+panel may take.
+
+The split of responsibility is deliberate and is what keeps the two from disagreeing:
+
+| | question | owns |
+|---|---|---|
+| **viability guard** | is a side-by-side possible *at all*? | `MIN_COLS + MIN_PEER` — a pure floor test |
+| **width clamp** | how wide, exactly? | `MAX_FRAC`, the peer ceiling, the requested width |
+
+The requested column count in the manifest (`88` for the editor) is a **preference**. The guard must
+never test it — v0.4.0 did, and refused a split whenever `avail - 88 < MIN_PEER`, which sent the
+editor to its own tab across a 32-column band (100–131) that the clamp handles perfectly well. On a
+145-column terminal herdr keeps 36 for its sidebar, leaving 109: the clamp puts the editor at 60 and
+the agent at 49, both comfortably over their floors. `tests/check-viability.sh` pins that band and
+`tests/check-sizing.py` pins the widths; both parse the constants out of the launcher, so retuning a
+number moves the tests with it.
+
+You will still get a tab below `MIN_COLS + MIN_PEER` columns of usable width — there, the two floors
+genuinely cannot coexist and a tab is the honest answer, the same thing VS Code does when you shrink
+a window.
+
+`TREE_COLS` is a third, softer target: the width at which herdr-edit gives the file tree its full 30
+columns (`defaultSidebarWidth` + `minEditorAfterDrag`). The clamp lifts the panel to clear it
+whenever the split can host it beside a readable agent, because `MAX_FRAC` otherwise caps the panel
+without ever asking what those columns can *show*. It is a comfort target, not a floor — it loses to
+`MIN_PEER`, and the tree stays on screen well below it, narrowing toward 18 columns rather than
+vanishing.
 
 `bin/herdr-extensions` is stdlib-only Python targeting **3.9** (what macOS ships), so there is no
 `tomllib` — config edits are marker-delimited text injections, which is also why your comments and

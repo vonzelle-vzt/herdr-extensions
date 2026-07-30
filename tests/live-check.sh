@@ -30,6 +30,17 @@ mkdir -p "$TMP/repo/nested/deep"
   && /usr/bin/git config user.email t@t.co && /usr/bin/git config user.name t \
   && echo hi > file.txt && /usr/bin/git add -A && /usr/bin/git commit -qm init ) >/dev/null 2>&1
 
+# Remember where the user actually was. Creating a workspace FOCUSES it, so this script moves the
+# user out of their own workspace and must put them back — "touches nothing of yours" has to include
+# where you were looking. Closing the throwaway workspaces at the end does not restore focus.
+WS_ORIG="$("$HERDR" workspace list 2>/dev/null | "$PY" -c "
+import json,sys
+try:
+    ws=json.load(sys.stdin)['result']['workspaces']
+    print(next((w['workspace_id'] for w in ws if w.get('focused')),''))
+except Exception:
+    print('')")"
+
 panes_json() { "$HERDR" pane list 2>/dev/null; }
 
 # Find a pane by its manifest title within a workspace.
@@ -102,13 +113,42 @@ print('%d %d' % (r.get(ed,{}).get('x',-1), r.get(ag,{}).get('x',-1)))" "$ED" "$A
       no "ORACLE 3: editor x=$edx is not left of agent x=$agx"
     fi
     # --- ORACLE 8: Nerd Font icons are emitted ----------------------------------------------
-    if "$HERDR" pane read "$ED" --source visible --lines 10 --format text 2>/dev/null | "$PY" -c "
+    # NO --lines. `pane read --lines N` returns the LAST N lines, like tail — and the file tree is
+    # drawn at the TOP of the pane, so a short tree in a tall pane put every icon outside the
+    # window. This oracle spent its life reading blank rows and reporting "no icon glyphs (expected
+    # if no Nerd Font is installed)" while 11 glyphs were on screen: a false negative wearing a
+    # plausible excuse, which is worse than a failure because nobody investigates it.
+    if "$HERDR" pane read "$ED" --source visible --format text 2>/dev/null | "$PY" -c "
 import sys
 raw=sys.stdin.buffer.read().decode('utf-8','replace')
 sys.exit(0 if any(0xE000<=ord(c)<=0xF8FF or 0xF0000<=ord(c)<=0xFFFFD for c in raw) else 1)"; then
       ok "ORACLE 8: file-tree icons are being emitted"
     else
       note "ORACLE 8: no icon glyphs (expected if no Nerd Font is installed)"
+    fi
+    # --- ORACLE 19: the panel actually SHOWS FILES ------------------------------------------
+    # The end-to-end assertion, and the only one that covers the whole chain at once: the panel
+    # auto-opened, the launcher sized it wide enough, and the editor chose to draw its tree there.
+    #
+    # This is the failure the geometry work was chasing, and every layer of it reported success
+    # while the user saw no files. The pane existed, its width cleared the editor minimum, and the
+    # editor drew "click open from the tree" — with no tree, because it hid the tree below 76
+    # columns and the panel was 60. Only reading the pane catches that.
+    edw="$("$HERDR" pane edges --pane "$ED" 2>/dev/null | "$PY" -c "
+import json,sys
+try:
+    lay=json.load(sys.stdin)['result']['edges']['layout']
+    print(next(p['rect']['width'] for p in lay['panes'] if p['pane_id']==sys.argv[1]))
+except Exception:
+    print(0)" "$ED")"
+    # Again no --lines: the EXPLORER header is the FIRST row of the pane.
+    if "$HERDR" pane read "$ED" --source visible --format text 2>/dev/null \
+        | grep -q "EXPLORER"; then
+      ok "ORACLE 19: the panel shows the file tree (${edw} columns wide)"
+    elif [ "${edw:-0}" -lt 42 ]; then
+      note "ORACLE 19: panel is ${edw} columns, below the editor tree floor (42) — tree correctly hidden"
+    else
+      no "ORACLE 19: no file tree in a ${edw}-column panel. Upstream spiceedit hides its tree below 76 columns; install herdr-edit, which narrows it instead"
     fi
   else
     no "ORACLE 4/3: no editor pane appeared in the repo workspace"
@@ -139,6 +179,15 @@ import json,sys
 ws=sys.argv[1]
 ps=json.load(sys.stdin)['result']['panes']
 print(next((p['pane_id'] for p in ps if p['workspace_id']==ws and not (p.get('label') or '')),''))" "$WS_REPO")"
+  # `plugin action invoke` has no --pane: an action always resolves the GLOBALLY focused pane. So
+  # the workspace has to be focused for real, and only `workspace focus` does that.
+  #
+  # This used to be a `pane zoom --on/--off` cycle, which focuses a pane WITHIN a workspace and
+  # cannot cross workspaces. ORACLE 5 had just created its non-repo workspace and left it focused,
+  # so open-git resolved a $HOME pane, correctly refused (lazygit needs a work tree) and opened
+  # nothing — and this oracle reported "git panel did not open" as though the panel were broken.
+  # A harness that steals focus has to be explicit about where it puts it back.
+  "$HERDR" workspace focus "$WS_REPO" >/dev/null 2>&1
   "$HERDR" pane zoom "$AG" --on >/dev/null 2>&1; "$HERDR" pane zoom "$AG" --off >/dev/null 2>&1
   sleep 1
   "$HERDR" plugin action invoke open-git --plugin herdr-extensions >/dev/null 2>&1; sleep 6
@@ -204,10 +253,28 @@ else
   no "ORACLE 14: panel sizing wrong -- run tests/check-sizing.py"
 fi
 
+# The remaining offline suites. This script is documented as usable as a release gate, and it was
+# not: three of the four offline suites existed and it ran none of them, so a gate that looked green
+# had never executed 39 of its own oracles. Each is delegated rather than reimplemented, so there is
+# still exactly one definition of every check.
+for suite in check-panels check-viability check-project-resolve; do
+  if [ ! -x "$ROOT/tests/$suite.sh" ]; then
+    no "$suite.sh missing or not executable"
+  elif out="$("$ROOT/tests/$suite.sh" 2>&1)"; then
+    ok "$suite.sh: $(printf '%s' "$out" | grep -o '[0-9]* passed' | tail -1)"
+  else
+    no "$suite.sh failed -- run tests/$suite.sh"
+    printf '%s\n' "$out" | grep FAIL | sed 's/^/        /'
+  fi
+done
+
 # --- cleanup ----------------------------------------------------------------------------------
 for w in "${WS_REPO:-}" "${WS_HOME:-}"; do
   [ -n "$w" ] && "$HERDR" workspace close "$w" >/dev/null 2>&1
 done
+# Put the user back where they were. Closing a focused workspace leaves focus wherever herdr
+# happens to land, which is not necessarily where the run started.
+[ -n "${WS_ORIG:-}" ] && "$HERDR" workspace focus "$WS_ORIG" >/dev/null 2>&1
 rm -rf "$TMP"
 
 echo

@@ -49,6 +49,7 @@ direction="${4:-right}"     # right | down  (split only; we swap afterwards for 
 trigger="${5:-key}"         # key | auto    (auto = fired from an event, not a keypress)
 swap="${6:-yes}"            # yes = swap after opening so the panel lands left/above
 ratio="${7:-}"              # target fraction of the split for THIS panel; empty = leave herdr's
+useful="${8:-0}"            # columns below which this panel loses its point (0 = no such width)
 herdr_bin="${HERDR_BIN_PATH:-herdr}"
 PY=/usr/bin/python3
 GIT=/usr/bin/git
@@ -56,6 +57,40 @@ GIT=/usr/bin/git
 # Where to point the editor when a keypress happens outside any repo. Shows project folders
 # instead of $HOME's dotfiles. Rendered by `herdr-extensions install --projects-root DIR`.
 PROJECTS_ROOT="@@PROJECTS_ROOT@@"
+
+# ============================ GEOMETRY POLICY — ONE SOURCE OF TRUTH ============================
+# These three numbers decide both "is a split possible at all?" (the viability guard below) and
+# "how wide should the panel be?" (the clamp at the bottom). They used to live in two places and
+# DISAGREED, which is the bug this block exists to prevent: the guard tested the RAW requested
+# width (88) while the clamp would have shrunk that same panel to fit (60 on a 109-column split).
+# So the guard sent the editor to its own tab on a geometry the clamp handles perfectly well —
+# rejecting a layout on a number the code never actually uses.
+#
+# The division of labour is now strict, and it is what keeps them from drifting apart again:
+#   * the GUARD answers a FLOOR question only — is there room for MIN_COLS + MIN_PEER? It never
+#     looks at the requested width, because the requested width is negotiable and the floor is not.
+#   * the CLAMP answers the sizing question — it alone owns MAX_FRAC and the ceilings.
+# Both read these variables; neither hardcodes a number. tests/check-sizing.py parses them straight
+# out of this file, so changing one here moves the test with it.
+MIN_COLS=56          # SpiceEdit minWidth(50) + tab bar/status margin, so the wall is never hit
+MIN_PEER=44          # below this the pane you split AWAY from stops being readable
+MAX_FRAC=0.55        # past this the panel is eating the agent, which defeats the layout
+
+# A panel can be wide enough to DRAW and still too narrow to be the thing you asked for. An Edit
+# panel with no file tree renders a hamburger and the words "click open from the tree" with nothing
+# to click — technically fine, useless as a file explorer.
+#
+# MAX_FRAC alone cannot see that: at a 130-column split it caps the panel at 71 columns without ever
+# asking what 71 columns can actually SHOW — the same mistake as the old viability guard. So the
+# launcher takes a per-panel "useful" threshold (argument 8) and lifts the panel to clear it whenever
+# the split can host it alongside a readable peer. The bottom panels pass 0; they have no such width.
+#
+# 70 = herdr-edit defaultSidebarWidth(30) + minEditorAfterDrag(40): the width at which it gives the
+# tree its FULL 30 columns. It is not a cliff — since the tree-narrowing change the tree stays on
+# screen down to treeNeeds(42), shrinking toward minSidebarWidth(18) — so this is a comfort target,
+# not a floor, which is why it may lose to MIN_PEER. (It used to be 76, the old `sidebarNeeds`, back
+# when the tree vanished below that instead of narrowing. That constant no longer exists.)
+TREE_COLS=70         # herdr-edit gives the file tree its full width at or above this
 
 panes_json="$("$herdr_bin" pane list 2>/dev/null || true)"
 
@@ -100,11 +135,13 @@ else:
     else:
         decision, out_pane = "OPEN", pane_id
 
-print("\t".join([decision, out_pane or "", tab_id, cwd]))
+ws_id = ctx.get("workspace_id") or cur.get("workspace_id") or ""
+
+print("\t".join([decision, out_pane or "", tab_id, cwd, ws_id]))
 EOF
 )"
 
-IFS=$'\t' read -r decision target tab_id cwd <<<"${plan:-}"
+IFS=$'\t' read -r decision target tab_id cwd ws_id <<<"${plan:-}"
 decision="${decision:-OPEN}"
 
 case "$decision" in
@@ -128,6 +165,59 @@ if [ -n "$cwd" ] && top="$("$GIT" -C "$cwd" rev-parse --show-toplevel 2>/dev/nul
   proj="$top"                       # inside a repo -> the repo root
 fi
 
+# Still nothing? Try the WORKSPACE LABEL against PROJECTS_ROOT before giving up.
+#
+# WHY. A workspace whose pane cwd is $HOME gets no editor at all on auto-open, because rooting the
+# tree at $HOME is the dotfile-soup problem this launcher exists to avoid. But a workspace LABELLED
+# "affiliate crm" plainly names a project — herdr-plus Projects and a plain `herdr workspace create`
+# both leave the root pane at $HOME unless you pass --cwd, so the label is the only thing that knows
+# which repo you meant, and the panel silently never appeared. That reads as a broken extension.
+#
+# Matching is deliberately conservative, because opening the WRONG repo is worse than opening none:
+# slugify the label, accept an exact directory match, else a UNIQUE prefix match ("affiliate crm" ->
+# affiliate-crm-fintech), and require a git repo. Two or more candidates means we do not actually
+# know, so we stay silent and let the existing fallbacks run.
+if [ -z "$proj" ] && [ -n "${ws_id:-}" ] && [ -d "$PROJECTS_ROOT" ]; then
+  proj="$("$PY" - "$("$herdr_bin" workspace list 2>/dev/null)" "$ws_id" "$PROJECTS_ROOT" <<'EOF' 2>/dev/null || true
+import json, os, re, sys
+
+ws_raw, ws_id, root = sys.argv[1:4]
+try:
+    spaces = json.loads(ws_raw)["result"]["workspaces"]
+except Exception:
+    spaces = []
+
+label = ""
+for w in spaces:
+    if w.get("workspace_id") == ws_id:
+        label = w.get("label") or ""
+        break
+
+# "Affiliate CRM (v2)" -> "affiliate-crm-v2". A label that slugifies to nothing cannot match.
+slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+if slug:
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        names = []
+
+    def is_repo(name):
+        return os.path.isdir(os.path.join(root, name, ".git"))
+
+    hit = ""
+    if slug in names and is_repo(slug):
+        hit = slug
+    else:
+        # A unique prefix match only. Ambiguity means we do not know which repo was meant.
+        near = [n for n in names if n.startswith(slug) and is_repo(n)]
+        if len(near) == 1:
+            hit = near[0]
+    if hit:
+        print(os.path.join(root, hit))
+EOF
+)"
+fi
+
 if [ -z "$proj" ]; then
   # Not a git repo. lazygit simply cannot run here, so bail regardless of trigger.
   [ "$entrypoint" = "git" ] && exit 0
@@ -140,16 +230,21 @@ if [ -z "$proj" ]; then
 fi
 
 # ============================ IS A SPLIT EVEN VIABLE? ============================
-# A side-by-side needs enough room for BOTH panes, and on a narrow terminal it simply does not
-# exist. Observed on a 105-column window: herdr's sidebar takes 36, leaving 69 to split; the editor
-# claims its 56-column minimum and the agent is left with 13 — technically a split, practically
-# useless, and the agent is the pane you were reading.
+# A side-by-side needs enough room for BOTH panes, and on a genuinely narrow terminal it does not
+# exist at any width. Observed on a 105-column window: herdr's sidebar takes 36, leaving 69 to
+# split; the editor claims its 56-column minimum and the agent is left with 13 — technically a
+# split, practically useless, and the agent is the pane you were reading. THAT is what this guard
+# is for, and 69 still fails it below.
 #
-# Neither clamp can rescue that, because the two requirements genuinely conflict. So detect it
-# BEFORE opening and use a tab instead, which is what VS Code does when you shrink a window. Only
-# applies to a horizontal split with a column-based size; a vertical panel and a fractional size
-# are both left alone.
-MIN_PEER=44          # below this the pane you split AWAY from stops being readable
+# What it must NOT do is test the REQUESTED width. The request is a preference; the clamp shrinks
+# it to fit. Asking "can I fit 88?" made the fallback fire on every split from 100 to 131 columns
+# wide — a 109-column split is fine, the clamp puts the editor at 60 and leaves the agent 49 —
+# so the editor kept landing in its own tab on screens that could host it perfectly well.
+# The only genuinely impossible case is when the two FLOORS cannot coexist, so that is the whole
+# test: MIN_COLS for the panel, MIN_PEER for the pane we split away from.
+#
+# Only applies to a horizontal split with a column-based size; a vertical panel and a fractional
+# size are both left alone.
 if [ "$mode" = "split" ] && [ "$direction" = "right" ] && [ -n "$ratio" ]; then
   avail="$("$PY" - "$("$herdr_bin" pane edges --pane "${target:-}" 2>/dev/null)" <<'EOF' 2>/dev/null || true
 import json, sys
@@ -160,17 +255,14 @@ except Exception:
     pass
 EOF
 )"
-  # No width shortcut here. An earlier version skipped the check above 100 columns, which left a
-  # hole at exactly 100: the editor took 88 and the peer got 12, the very outcome this guards.
   if [ -n "$avail" ]; then
     case "$ratio" in
-      *.*) : ;;                      # a fraction, not columns — the arithmetic below would be wrong
+      *.*) : ;;                      # a fraction, not columns — this floor is in the wrong unit
       [0-9]*)
-        need=$((ratio < 56 ? 56 : ratio))
         # Only the editor has a tab variant to fall back to. Everything else is a bottom panel
         # (direction=down) and never reaches this branch, but be explicit rather than building an
         # entrypoint id by string concatenation that could name a pane the manifest does not have.
-        if [ "$((avail - need))" -lt "$MIN_PEER" ] && [ "$entrypoint" = "editor" ]; then
+        if [ "$avail" -lt "$((MIN_COLS + MIN_PEER))" ] && [ "$entrypoint" = "editor" ]; then
           mode="tab"
           entrypoint="editor-tab"
         fi
@@ -224,24 +316,31 @@ fi
 # a vertical (down) panel too.
 if [ -n "$ratio" ] && [ -n "$new_pane" ]; then
   edges_json="$("$herdr_bin" pane edges --pane "$new_pane" 2>/dev/null || true)"
-  move="$("$PY" - "$edges_json" "$new_pane" "$ratio" <<'EOF' 2>/dev/null || true
+  move="$("$PY" - "$edges_json" "$new_pane" "$ratio" "$MIN_COLS" "$MIN_PEER" "$MAX_FRAC" "$useful" <<'EOF' 2>/dev/null || true
 import json, sys
 
 # SpiceEdit refuses to draw below 50 columns and its file tree is a fixed 30, so a panel sized as
 # a bare FRACTION is a trap: 0.40 of a 200-col screen is a comfortable 80, but 0.40 of a 120-col
 # laptop is 48 — under the wall, and the panel renders "Window too small — please resize".
 # So the requested size is a COLUMN COUNT (>=1), converted to a ratio against the actual split,
-# then clamped: never below the usable minimum, never more than MAX_FRAC of the screen.
+# then clamped: never below the usable minimum, never more than MAX_FRAC of the screen, and never
+# so wide that the pane we split away from drops under MIN_PEER.
+#
+# The requested width is a PREFERENCE, not a demand — this is the only place allowed to decide the
+# final number, and the viability guard above deliberately does not second-guess it. That is why a
+# 109-column split now yields a 60-column editor beside a 49-column agent instead of a fallback to
+# a separate tab.
 #
 # NOTE no apostrophes anywhere in this heredoc. bash 3.2 (what /bin/bash still is on macOS, and
 # what launchd PATH resolves) mis-parses a lone quote inside a heredoc nested in $( ), and the
 # whole script then fails to parse — silently, because herdr just sees the action do nothing.
 # A value below 1 is still accepted and taken as a literal fraction, for a vertical panel where
 # columns are the wrong unit.
-MIN_COLS = 56          # minWidth(50) + tab bar/status margin, so the wall is never hit
-MAX_FRAC = 0.55        # past this the panel is eating the agent, which defeats the layout
-
-edges_raw, pane_id, target = sys.argv[1:4]
+edges_raw, pane_id, target, min_cols, min_peer, max_frac, min_useful = sys.argv[1:8]
+MIN_COLS = int(min_cols)     # minWidth(50) + tab bar/status margin, so the wall is never hit
+MIN_PEER = int(min_peer)     # the pane we split away from stays readable
+MAX_FRAC = float(max_frac)   # past this the panel is eating the agent, which defeats the layout
+MIN_USEFUL = int(min_useful) # width below which this panel stops being the thing you asked for
 try:
     lay = json.loads(edges_raw)["result"]["edges"]["layout"]
     me = next(p["rect"] for p in lay["panes"] if p["pane_id"] == pane_id)
@@ -268,7 +367,21 @@ try:
             # genuinely conflict (50 cols of a 80-col screen is already 63%, over MAX_FRAC), and
             # an oversized panel is merely annoying while an under-minimum one renders nothing
             # but "Window too small". Prefer usable. Capped at 0.9 so the agent never vanishes.
-            want = min(want / span, MAX_FRAC)
+            #
+            # Two ceilings, both required. MAX_FRAC is a share of the screen and MIN_PEER is an
+            # absolute column count, and neither implies the other: on a wide split MAX_FRAC binds
+            # first, while a hand-tuned MAX_FRAC closer to 1.0 would starve the peer without the
+            # second term. Taking the min of both means the requested width shrinks to fit rather
+            # than being refused, which is the whole reason the guard above can stay a floor test.
+            want = min(want / span, MAX_FRAC, (span - MIN_PEER) / float(span))
+
+            # Lift to the useful threshold when it fits beside a readable peer. This deliberately
+            # overrides MAX_FRAC: a panel at 55% that cannot show its file tree is not a milder
+            # version of the layout, it is a different and worse one. Guarded by the same peer
+            # ceiling as everything else, so it can never be the thing that starves the agent.
+            if MIN_USEFUL and MIN_USEFUL <= span - MIN_PEER:
+                want = max(want, MIN_USEFUL / float(span))
+
             want = max(want, min(MIN_COLS / span, 0.9))
 
         # `ratio` is the share belonging to the FIRST child, so a second-child panel that wants
