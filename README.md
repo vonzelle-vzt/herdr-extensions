@@ -35,6 +35,8 @@ break, because there are no plugins.
 | `ctrl+b` `shift+b` | Blame and history for the file you are looking at. |
 | `ctrl+b` `shift+v` | Markdown preview. |
 | `ctrl+b` `shift+u` | Tests — vitest / jest / pytest. |
+| `ctrl+b` `i` | **Paste an image** — clipboard screenshot, or the newest capture, typed as a path to the agent. |
+| `ctrl+b` `shift+l` / `shift+h` | Nudge the split divider right / left. |
 
 Plus a VS Code skin for herdr itself:
 
@@ -76,6 +78,34 @@ Every command they run is resolved to an **absolute path**, because the herdr se
 launchd with `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and a bare binary name fails to spawn with no
 useful error. Worth knowing: on many machines `rg` is a *shell function*, so anything that `execve`s
 it fails even though `rg` works fine when you type it.
+
+## Images and screenshots in a terminal chat
+
+Terminals carry text, not image bytes, so there is no way to paste a PNG into a pane. But agents read
+image **paths** natively — so the problem reduces to getting a path onto the prompt line, which is
+plain text and works fully locally. herdr's own image paste is `--remote` only because it tries to
+bridge the clipboard itself; this needs none of that.
+
+`ctrl+b` `i` stages an image and types its path into the agent pane, **without** pressing Enter, so you
+add your question before submitting:
+
+1. an image on the clipboard (`Cmd+Ctrl+Shift+4`, or any *Copy Image*) — needs `pngpaste`;
+2. otherwise the newest screenshot, read from your **actual** `com.apple.screencapture location`
+   rather than a hardcoded `~/Desktop`;
+3. `image-paste.sh <file>` for an explicit file.
+
+**Drag and drop** works through the terminal, not through this package: dropping a file on Ghostty (or
+iTerm2, or Terminal.app) inserts its *path* at the cursor, which is exactly what the agent needs — so
+drop an image straight into the prompt and add your question. If your terminal inserts nothing, that is
+a terminal setting, not something herdr-extensions can supply.
+
+It picks the pane carefully: focus is usually parked on one of our own panels — the editor auto-opens
+focused — and a path typed into the file tree does nothing at all. So it targets the focused pane only
+when that is not one of ours, then an agent in the same tab, then the same workspace, and only then
+anywhere else. Dropping a path into a live session in an unrelated project is worse than doing nothing.
+
+Staged clipboard images land in `~/.vzt/shots`; `image-paste.sh --prune [DAYS]` clears old ones and
+`doctor` warns once there are more than 200.
 
 ## Troubleshooting
 

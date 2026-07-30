@@ -166,6 +166,24 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
     Nerd Font is installed)"* while 11 glyphs were on screen — a false negative wearing a plausible
     excuse, which is worse than a failure because nobody investigates it. Omit `--lines`.
 
+15. **An image reaches the agent as a PATH, never as bytes.** Terminals carry text, so pasting a PNG
+    into a pane is not possible — but agents read image paths natively, which reduces the whole
+    feature to typing a path onto the prompt line. That works fully locally with the mouse UI intact;
+    herdr's own image paste is `--remote` only precisely because it tries to bridge the clipboard.
+    Enter is deliberately NOT sent, so the user adds their question before submitting.
+    Sources, in order: the clipboard (via `pngpaste`), then the newest screenshot read from the real
+    `com.apple.screencapture location` — hardcoding `~/Desktop` makes the fallback quietly useless for
+    anyone who moved their captures — then an explicit file, which is also what a Finder drop gives
+    you. `--clipboard-only` suppresses the fallback: a deliberate keypress may reach for the last
+    screenshot, but a "paste THIS" that silently pastes something else is astonishing.
+    🔴 The pane choice is the hard part, not the typing. Focus is usually parked on one of OUR panels
+    (the editor auto-opens focused) and a path typed into the file tree does nothing at all, silently.
+    So: the focused pane only if it is not one of ours, then an agent in the same tab, then the same
+    workspace, and only then anywhere. Jumping straight to "any agent" can drop a path into a live
+    session in an unrelated project, which is worse than doing nothing.
+    `pngpaste` is a silent partial dependency — without it the clipboard source dies but the
+    screenshot fallback still works — so `doctor` names it rather than letting it fail quietly.
+
 ## Verification (each must pass before release)
 
 | # | Check | Oracle |
@@ -191,6 +209,7 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 | 19 | The panel actually shows files | `pane read` on the auto-opened editor contains `EXPLORER`. The end-to-end check: auto-opened, sized wide enough, and the editor chose to draw its tree. **No `--lines`** — it is `tail`-like and the tree is at the top |
 | 21 | A workspace named after a project opens it | `workspace.created` with `--cwd $HOME` and a label matching a repo under `PROJECTS_ROOT` opens an editor rooted at that repo **and** rendering `EXPLORER`. The positive counterpart to oracle 5 — oracle 5 passing was the whole bug, since it only proved the silent path with a label matching nothing |
 | 22 | Focus is confirmed, never assumed | `plugin action invoke` resolves the globally focused pane, so the harness waits until `pane list` reports the target focused instead of sleeping. A `sleep 1` here was always a race and only lost it once another workspace-creating oracle was added ahead of oracle 6 |
+| 23 | Image paste targets the agent, not a panel | Against a stubbed herdr: an explicit file resolves to an absolute path (compared RESOLVED — macOS `$TMPDIR` is a symlink); a focused agent receives it; focus on ANY of the nine panel labels still delivers to the agent; the fallback stays in the focused pane's own tab rather than a stranger elsewhere; no Enter is sent and a trailing space is; `--clipboard-only` refuses instead of pasting a stale screenshot; `--prune` removes old clips only — `tests/check-image-paste.sh` |
 | 20 | The gate runs every suite | `live-check.sh` delegates to `check-panels.sh`, `check-viability.sh` and `check-project-resolve.sh` rather than reimplementing them, and restores the originally focused workspace when it is done |
 
 ## Distribution

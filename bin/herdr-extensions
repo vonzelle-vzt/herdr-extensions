@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 HOME = os.path.expanduser("~")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,6 +77,8 @@ KEYS = [
     ("prefix+shift+u", "open-tests", "Tests panel: vitest/jest/pytest, below"),
     # herdr has no mouse divider drag and only a modal resize (prefix+r), so give the divider a
     # one-keypress nudge. shift+h/shift+l mirror herdr's own h/l pane-navigation direction.
+    # Images: stage the clipboard image (or newest screenshot) and type its path to the agent.
+    ("prefix+i", "paste-image", "paste an image/screenshot path to the agent"),
     ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
     ("prefix+shift+h", "resize-narrower", "move the split divider left one step"),
 ]
@@ -436,6 +438,10 @@ def render_plugin(dry, projects_root):
     if not os.path.isfile(src_resize):
         die("package file missing: %s" % src_resize)
     resizer = open(src_resize).read().replace("@@HERDR@@", which("herdr") or "herdr")
+    src_img = os.path.join(REPO, "plugin", "image-paste.sh")
+    if not os.path.isfile(src_img):
+        die("package file missing: %s" % src_img)
+    imgpaste = open(src_img).read().replace("@@HERDR@@", which("herdr") or "herdr")
 
     if dry:
         act("would write %s (spiceedit=%s, lazygit=%s, %d panel scripts)"
@@ -445,7 +451,8 @@ def render_plugin(dry, projects_root):
     os.makedirs(PLUGIN_DST, exist_ok=True)
     changed = False
     files = [("herdr-plugin.toml", manifest, 0o644), ("open-panel.sh", launcher, 0o755),
-             ("resize-pane.sh", resizer, 0o755)]
+             ("resize-pane.sh", resizer, 0o755),
+             ("image-paste.sh", imgpaste, 0o755)]
     files += [(n, open(p).read(), 0o755) for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
     for name, body, mode in files:
         dst = os.path.join(PLUGIN_DST, name)
@@ -977,6 +984,27 @@ def cmd_doctor(_args=None):
         ok("prettier reachable (global or vendored)")
     else:
         warn("no global prettier — only repos vendoring it will format")
+
+    head("Image paste")
+    # pngpaste is the only way to get an image OFF the macOS clipboard from a script. Without it
+    # ctrl+b i still works from the screenshot fallback, so the failure is partial and silent --
+    # exactly the kind this tool exists to name out loud.
+    if which("pngpaste"):
+        ok("pngpaste installed — clipboard images can be pasted")
+    elif sys.platform == "darwin":
+        warn("pngpaste missing — ctrl+b i will fall back to the newest screenshot and cannot read "
+             "the clipboard (brew install pngpaste)")
+    else:
+        # Linux: pngpaste is macOS-only, so its absence is not a fault there.
+        ok("clipboard images need pngpaste (macOS); the screenshot fallback works without it")
+    shots = os.path.expanduser("~/.vzt/shots")
+    if os.path.isdir(shots):
+        n = len([f for f in os.listdir(shots) if f.startswith("clip-")])
+        if n > 200:
+            warn("%d staged shots in ~/.vzt/shots — run `ctrl+b i` prune or "
+                 "`image-paste.sh --prune`" % n)
+        else:
+            ok("%d staged shot(s) in ~/.vzt/shots" % n)
 
     head("Keymap")
     reserved = reserved_keys()
