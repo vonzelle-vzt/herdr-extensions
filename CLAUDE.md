@@ -123,6 +123,18 @@ Bar for new work:
   pane. `pane zoom` focuses within a workspace and cannot cross workspaces, so use `workspace focus`.
   A harness that steals focus must also put it back.
 
+## Working on the sibling repo
+
+[herdr-edit](https://github.com/vonzelle-vzt/herdr-edit) has its own `CLAUDE.md`; two of its traps
+bite from here too:
+
+- **Merging its `main` cuts a release** (tag → GoReleaser → brew formula). A locally built editor then
+  goes stale silently while still first on `PATH`. `doctor` warns about it; rebuild after every pull.
+- 🔴 **Never write the CI-skip marker in a commit message you want to run.** GitHub scans the whole
+  message, body included, so explaining the marker in prose opts the commit out — producing **no
+  workflow runs at all**, which looks like a broken trigger rather than an opt-out. Describe it,
+  never spell it.
+
 ## What NOT to add
 
 - **A plugin system.** This is an installer. If it needs its own extension points, it has failed.
