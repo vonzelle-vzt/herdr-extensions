@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -786,6 +786,54 @@ def install_deps(dry):
             warn("npm not found — format-on-save will only work in repos that vendor prettier")
 
 
+
+def editor_staleness():
+    """Warn when the editor on PATH is older than the release the tap offers.
+
+    A hand-built editor goes stale silently. Building from source puts a binary on PATH that never
+    changes again, while merging the fork's main auto-tags a release -- so the two drift apart with
+    nothing to say so, and a bug you already fixed keeps reproducing. Observed for real: a locally
+    built 0.5.0 while the tap had moved to 0.5.4.
+
+    Deliberately OFFLINE: it reads the version out of the tapped formula on disk rather than asking
+    GitHub, so `doctor` stays fast and works on a plane. No tap, no check -- silence beats a
+    network-dependent warning that sometimes appears.
+    """
+    ed = which(EDITOR_CANDIDATES[0])
+    if not ed:
+        return
+    rc, out = run([ed, "--version"])
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+    if rc != 0 or not m:
+        return
+    have = tuple(int(g) for g in m.groups())
+
+    # The formula lives in the tap Homebrew cloned for us; `brew --repo <tap>` names it without
+    # needing brew to resolve anything.
+    brew = which("brew")
+    if not brew:
+        return
+    rc, repo = run([brew, "--repo", "vonzelle-vzt/herdr-edit"])
+    formula = os.path.join((repo or "").strip(), "Formula", "herdr-edit.rb")
+    if rc != 0 or not os.path.isfile(formula):
+        return
+    try:
+        body = open(formula).read()
+    except OSError:
+        return
+    m = re.search(r'/v(\d+)\.(\d+)\.(\d+)\.tar\.gz', body) or \
+        re.search(r'version\s+"(\d+)\.(\d+)\.(\d+)"', body)
+    if not m:
+        return
+    avail = tuple(int(g) for g in m.groups())
+
+    hv, av = ".".join(map(str, have)), ".".join(map(str, avail))
+    if have < avail:
+        warn("herdr-edit %s is older than %s in the tap — rebuild (`make build` in a checkout, or "
+             "`brew upgrade herdr-edit`). A source build never updates itself." % (hv, av))
+    else:
+        ok("herdr-edit %s is current (tap offers %s)" % (hv, av))
+
 def prettier_available():
     if which("prettier"):
         return True
@@ -933,6 +981,7 @@ def cmd_doctor(_args=None):
         else:
             bad("%-10s not found" % name)
             fails += 1
+    editor_staleness()
 
     head("Plugin")
     reg = plugin_registered()

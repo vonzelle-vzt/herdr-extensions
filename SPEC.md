@@ -225,6 +225,17 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
     test.** Oracle 25 now checks tap/install agreement and symlinked invocation, and the formula is
     installed for real in CI-like conditions rather than reasoned about.
 
+18. **A source-built dependency goes stale silently, so say so out loud.** `herdr-edit` is normally
+    installed by `install`, but anyone working on the editor builds it instead — and a source build
+    never updates itself, while every push to the fork's `main` auto-tags a release. The two drift
+    apart with nothing to indicate it: the binary is still first on `PATH` and still reports success.
+    Observed for real, a locally built 0.5.0 against a tap at 0.5.4, which means a bug already fixed
+    keeps reproducing and the next debugging session starts from a false premise.
+    `doctor` therefore compares the editor on `PATH` against the version in the **tapped formula on
+    disk** — deliberately offline, so the check stays fast and works without a network. No tap means
+    no check: silence beats a warning that only sometimes appears. It is a `WARN`, not a failure,
+    because a stale editor still works.
+
 ## Verification (each must pass before release)
 
 | # | Check | Oracle |

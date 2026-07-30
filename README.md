@@ -513,7 +513,9 @@ herdr-extensions skin <name> | list | reset
 - **`uninstall`** removes the plugin and the managed keybinding block, leaving your settings
   byte-for-byte intact. `--purge` also removes the editor configs it wrote.
 - **`doctor`** checks every moving part and explains each failure. Exits non-zero if anything is
-  broken, so it works in CI.
+  broken, so it works in CI. It also warns when the editor on your `PATH` is **older than the release
+  the tap offers** — which happens silently to anyone who builds the editor from source, since a
+  source build never updates itself. The check reads the tapped formula on disk, so it stays offline.
 
 ## File icons need one manual step
 
