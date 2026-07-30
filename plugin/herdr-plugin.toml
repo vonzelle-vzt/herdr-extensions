@@ -22,7 +22,7 @@
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
 id = "herdr-extensions"
 name = "herdr-extensions"
-version = "0.5.2"
+version = "0.6.0"
 description = "Tiny VS Code for herdr: editor + lazygit + problems/search/todo/blame/markdown/tests panels."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
@@ -149,6 +149,24 @@ command = ["bash", "open-panel.sh", "git", "Git", "split", "down", "key", "no", 
 # Panel bundle actions. All bottom panels (direction=down, swap=no), same shape as open-git above:
 # a persistent VS-Code-style output panel rather than a left/right editor-adjacent split.
 # ---------------------------------------------------------------------------------------------
+
+# Divider nudge. herdr 0.7.5 has no mouse divider drag and its only built-in resize path is the
+# modal `resize_mode` (prefix+r), so these are the missing middle: one keypress, one step, the way
+# an IDE does it. Direction is where the DIVIDER moves, which stays predictable regardless of which
+# pane has focus.
+[[actions]]
+id = "resize-wider"
+platforms = ["linux", "macos"]
+title = "Move the split divider right"
+description = "Nudge the divider between this pane and its neighbour one step to the right."
+command = ["bash", "resize-pane.sh", "right", "0.05"]
+
+[[actions]]
+id = "resize-narrower"
+platforms = ["linux", "macos"]
+title = "Move the split divider left"
+description = "Nudge the divider between this pane and its neighbour one step to the left."
+command = ["bash", "resize-pane.sh", "left", "0.05"]
 
 [[actions]]
 id = "open-problems"

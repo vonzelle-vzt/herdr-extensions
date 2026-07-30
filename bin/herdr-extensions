@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.5.2"
+VERSION = "0.6.0"
 
 HOME = os.path.expanduser("~")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -75,6 +75,10 @@ KEYS = [
     ("prefix+shift+v", "open-markdown", "Markdown preview (glow) of the active file, below (VS Code shift+cmd+V)"),
     ("prefix+d", "open-debug", "Debug panel: launch configs + adapter handoff (VS Code ctrl+shift+D)"),
     ("prefix+shift+u", "open-tests", "Tests panel: vitest/jest/pytest, below"),
+    # herdr has no mouse divider drag and only a modal resize (prefix+r), so give the divider a
+    # one-keypress nudge. shift+h/shift+l mirror herdr's own h/l pane-navigation direction.
+    ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
+    ("prefix+shift+h", "resize-narrower", "move the split divider left one step"),
 ]
 
 # ---------------------------------------------------------------------------------------------
@@ -426,6 +430,12 @@ def render_plugin(dry, projects_root):
     manifest = open(src_manifest).read()
     manifest = manifest.replace("@@SPICEEDIT@@", spice).replace("@@LAZYGIT@@", lazy)
     launcher = open(src_launcher).read().replace("@@PROJECTS_ROOT@@", projects_root)
+    # resize-pane.sh needs herdr itself by absolute path, for the same launchd-PATH reason every
+    # other command here is absolute: a bare `herdr` never resolves in a plugin action.
+    src_resize = os.path.join(REPO, "plugin", "resize-pane.sh")
+    if not os.path.isfile(src_resize):
+        die("package file missing: %s" % src_resize)
+    resizer = open(src_resize).read().replace("@@HERDR@@", which("herdr") or "herdr")
 
     if dry:
         act("would write %s (spiceedit=%s, lazygit=%s, %d panel scripts)"
@@ -434,7 +444,8 @@ def render_plugin(dry, projects_root):
 
     os.makedirs(PLUGIN_DST, exist_ok=True)
     changed = False
-    files = [("herdr-plugin.toml", manifest, 0o644), ("open-panel.sh", launcher, 0o755)]
+    files = [("herdr-plugin.toml", manifest, 0o644), ("open-panel.sh", launcher, 0o755),
+             ("resize-pane.sh", resizer, 0o755)]
     files += [(n, open(p).read(), 0o755) for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
     for name, body, mode in files:
         dst = os.path.join(PLUGIN_DST, name)
