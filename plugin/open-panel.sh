@@ -76,17 +76,21 @@ MIN_COLS=56          # SpiceEdit minWidth(50) + tab bar/status margin, so the wa
 MIN_PEER=44          # below this the pane you split AWAY from stops being readable
 MAX_FRAC=0.55        # past this the panel is eating the agent, which defeats the layout
 
-# A panel can be wide enough to DRAW and still too narrow to be the thing you asked for. The editor
-# hides its file tree below herdr-edit `sidebarNeeds` (76 = a 30-column tree + a readable editor),
-# so a 60-column Edit panel renders a hamburger and the words "click open from the tree" with no
-# tree in sight — technically fine, useless as a file explorer.
+# A panel can be wide enough to DRAW and still too narrow to be the thing you asked for. An Edit
+# panel with no file tree renders a hamburger and the words "click open from the tree" with nothing
+# to click — technically fine, useless as a file explorer.
 #
-# MAX_FRAC alone cannot see that. At a 130-column split it caps the panel at 71 and hides the tree
-# even though 76 + MIN_PEER fits with 10 columns spare — the same mistake as the old viability guard,
-# a limit that ignores the number that actually changes what you SEE. So the launcher takes a
-# per-panel "useful" threshold (argument 8) and lifts the panel to clear it whenever the split can
-# host it alongside a readable peer. Passed as 0 by the bottom panels, which have no such threshold.
-TREE_COLS=76         # herdr-edit sidebarNeeds — below this the file tree auto-hides
+# MAX_FRAC alone cannot see that: at a 130-column split it caps the panel at 71 columns without ever
+# asking what 71 columns can actually SHOW — the same mistake as the old viability guard. So the
+# launcher takes a per-panel "useful" threshold (argument 8) and lifts the panel to clear it whenever
+# the split can host it alongside a readable peer. The bottom panels pass 0; they have no such width.
+#
+# 70 = herdr-edit defaultSidebarWidth(30) + minEditorAfterDrag(40): the width at which it gives the
+# tree its FULL 30 columns. It is not a cliff — since the tree-narrowing change the tree stays on
+# screen down to treeNeeds(42), shrinking toward minSidebarWidth(18) — so this is a comfort target,
+# not a floor, which is why it may lose to MIN_PEER. (It used to be 76, the old `sidebarNeeds`, back
+# when the tree vanished below that instead of narrowing. That constant no longer exists.)
+TREE_COLS=70         # herdr-edit gives the file tree its full width at or above this
 
 panes_json="$("$herdr_bin" pane list 2>/dev/null || true)"
 

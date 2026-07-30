@@ -253,6 +253,13 @@ You will still get a tab below `MIN_COLS + MIN_PEER` columns of usable width —
 genuinely cannot coexist and a tab is the honest answer, the same thing VS Code does when you shrink
 a window.
 
+`TREE_COLS` is a third, softer target: the width at which herdr-edit gives the file tree its full 30
+columns (`defaultSidebarWidth` + `minEditorAfterDrag`). The clamp lifts the panel to clear it
+whenever the split can host it beside a readable agent, because `MAX_FRAC` otherwise caps the panel
+without ever asking what those columns can *show*. It is a comfort target, not a floor — it loses to
+`MIN_PEER`, and the tree stays on screen well below it, narrowing toward 18 columns rather than
+vanishing.
+
 `bin/herdr-extensions` is stdlib-only Python targeting **3.9** (what macOS ships), so there is no
 `tomllib` — config edits are marker-delimited text injections, which is also why your comments and
 settings survive. [SPEC.md](SPEC.md) records every design decision and the reason behind it; each one
