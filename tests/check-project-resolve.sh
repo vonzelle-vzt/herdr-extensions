@@ -27,6 +27,11 @@ LOG="$TMP/log"
 
 # Two repos sharing a prefix, plus a plain directory that is NOT a repo.
 mkdir -p "$PROJECTS/demo-alpha/.git" "$PROJECTS/demo-alpha-extra/.git" "$PROJECTS/notes-only"
+# An OWNER-PREFIXED repo: the directory carries a namespace the workspace label does not.
+# "Prop Trading Tech" -> prop-trading-tech, while the checkout is vzt-prop-trading-tech.
+mkdir -p "$PROJECTS/vzt-prop-trading-tech/.git"
+# An AMBIGUOUS pair: two repos a single label could plausibly mean.
+mkdir -p "$PROJECTS/vzt-protocol-core/.git" "$PROJECTS/vzt-protocol-docs/.git"
 
 # Render the launcher exactly as install does.
 LAUNCHER="$TMP/open-panel.sh"
@@ -88,8 +93,10 @@ else
   no "18b: label 'demo alpha' -> ${got:-<nothing>}, expected $PROJECTS/demo-alpha"
 fi
 
-# --- 18c: an ambiguous prefix opens NOTHING -----------------------------------------------------
-# "demo" prefixes two repos. Guessing would root the tree in the wrong project.
+# --- 18c: an ambiguous prefix NEVER guesses a repo ----------------------------------------------
+# "demo" prefixes two repos. Guessing would root the tree in the wrong project, which is worse than
+# not opening one -- you would edit the wrong checkout without noticing. The fallback is the project
+# list, never one of the candidates.
 got="$(resolved_for "demo")"
 if [ -z "$got" ]; then
   ok "18c: ambiguous label 'demo' opens nothing rather than guessing"
@@ -106,12 +113,18 @@ else
 fi
 
 # --- 18e: a label that matches nothing stays silent on auto-open --------------------------------
-# The original contract: auto-open must never dump \$HOME into the tree.
+# The contract: auto-open must never dump $HOME into the tree, and must not sprout an editor in a
+# workspace created for something other than a project. ORACLE 5 guards the live half of this.
 got="$(resolved_for "nothing like this exists")"
 if [ -z "$got" ]; then
   ok "18e: an unmatched label still opens no editor on auto-open"
 else
   no "18e: unmatched label resolved to $got"
+fi
+if [ "$got" != "$HOME" ]; then
+  ok "18e: and it is never \$HOME"
+else
+  no "18e: auto-open rooted the tree at \$HOME"
 fi
 
 # --- 18f: a label that slugifies to nothing cannot match ----------------------------------------
@@ -135,6 +148,30 @@ if [ "$got" = "$ROOT" ]; then
 else
   no "18g: repo cwd gave ${got:-<nothing>}, expected $ROOT"
 fi
+
+# --- 18h: an OWNER-PREFIXED directory is found by suffix ----------------------------------------
+# This is the case that sent a real workspace to no editor at all: directories are routinely
+# namespaced ("vzt-prop-trading-tech") while the space is named for the product ("Prop Trading
+# Tech"). A prefix-only matcher scores that zero and gives up.
+got="$(resolved_for "Prop Trading Tech")"
+if [ "$got" = "$PROJECTS/vzt-prop-trading-tech" ]; then
+  ok "18h: an owner-prefixed repo is matched from the product-named label"
+else
+  no "18h: 'Prop Trading Tech' resolved to ${got:-<nothing>}, expected $PROJECTS/vzt-prop-trading-tech"
+fi
+
+# --- 18i: ambiguity NEVER guesses a repo -------------------------------------------------------
+# Two plausible candidates means we do not know. Opening the wrong repository is worse than opening
+# none, so this must land on the project list rather than pick a winner.
+got="$(resolved_for "VZT Protocol")"
+case "$got" in
+  "$PROJECTS/vzt-protocol-core"|"$PROJECTS/vzt-protocol-docs")
+    no "18i: an ambiguous label GUESSED $got" ;;
+  "")
+    ok "18i: an ambiguous label refuses to guess and opens nothing" ;;
+  *)
+    no "18i: ambiguous label resolved to $got" ;;
+esac
 
 echo
 echo "  $pass passed, $fail failed"

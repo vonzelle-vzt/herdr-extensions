@@ -204,14 +204,30 @@ if slug:
     def is_repo(name):
         return os.path.isdir(os.path.join(root, name, ".git"))
 
+    # Tried in order of how sure each rule is, and every rule requires a UNIQUE
+    # answer: opening the wrong repository is worse than opening none, so two
+    # candidates always means we stay silent and let the caller fall back.
+    #
+    # The suffix rule is the one that earns its keep here. Directories are
+    # routinely namespaced with an owner prefix -- "vzt-prop-trading-tech" --
+    # while the workspace gets called "Prop Trading Tech". A prefix-only matcher
+    # scores that as zero candidates and the editor never appears, which reads
+    # as the extension being broken rather than as a naming mismatch.
+    def unique(cands):
+        return cands[0] if len(cands) == 1 else ""
+
     hit = ""
     if slug in names and is_repo(slug):
         hit = slug
-    else:
-        # A unique prefix match only. Ambiguity means we do not know which repo was meant.
-        near = [n for n in names if n.startswith(slug) and is_repo(n)]
-        if len(near) == 1:
-            hit = near[0]
+    if not hit:
+        hit = unique([n for n in names if n.startswith(slug) and is_repo(n)])
+    if not hit:
+        hit = unique([n for n in names if n.endswith("-" + slug) and is_repo(n)])
+    if not hit:
+        # Last and loosest: the slug appears whole, delimited, somewhere in the
+        # name. Still unique-or-nothing.
+        hit = unique([n for n in names
+                      if ("-" + slug + "-") in ("-" + n + "-") and is_repo(n)])
     if hit:
         print(os.path.join(root, hit))
 EOF
@@ -222,6 +238,12 @@ if [ -z "$proj" ]; then
   # Not a git repo. lazygit simply cannot run here, so bail regardless of trigger.
   [ "$entrypoint" = "git" ] && exit 0
   # Auto-open stays silent rather than dumping $HOME into the tree.
+  #
+  # It was tempting to fall back to PROJECTS_ROOT here so a new space always got
+  # SOMETHING, and that is wrong: a workspace created for a scratch shell or a
+  # remote session would sprout an editor nobody asked for. ORACLE 5 guards this
+  # deliberately. The right fix for "my project files do not appear" is a better
+  # LABEL match (see the matcher above), not opening an editor everywhere.
   [ "$trigger" = "auto" ] && exit 0
   if [ -d "$PROJECTS_ROOT" ]; then proj="$PROJECTS_ROOT"
   elif [ -n "$cwd" ];        then proj="$cwd"
