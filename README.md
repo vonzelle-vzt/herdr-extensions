@@ -119,10 +119,21 @@ add your question before submitting:
    rather than a hardcoded `~/Desktop`;
 3. `image-paste.sh <file>` for an explicit file.
 
-**Drag and drop** works through the terminal, not through this package: dropping a file on Ghostty (or
-iTerm2, or Terminal.app) inserts its *path* at the cursor, which is exactly what the agent needs — so
-drop an image straight into the prompt and add your question. If your terminal inserts nothing, that is
-a terminal setting, not something herdr-extensions can supply.
+**Drag and drop works, and it bypasses this package entirely** — verified in Ghostty: dropping an
+image on the prompt hands it to the agent directly, and the agent caches the file itself. Prefer it
+when you have a file on disk, because it is the *higher fidelity* route: the dropped file arrives
+byte-for-byte (measured: 20,501 bytes in, 20,501 bytes cached), whereas the clipboard round-trip
+re-encodes the PNG on the way through (the same image came out at 28,377 bytes).
+
+So the two paths are complementary rather than redundant:
+
+| | use it for | fidelity |
+| --- | --- | --- |
+| **drag & drop** | a file you already have | original bytes, handled by the agent |
+| **`ctrl+b` `i`** | a screenshot you just took, still on the clipboard | re-encoded PNG, staged in `~/.vzt/shots` |
+
+The clipboard is the case a terminal genuinely cannot do on its own, which is why it needs staging: you
+cannot drop something that has never been a file.
 
 It picks the pane carefully: focus is usually parked on one of our own panels — the editor auto-opens
 focused — and a path typed into the file tree does nothing at all. So it targets the focused pane only
