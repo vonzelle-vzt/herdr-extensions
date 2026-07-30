@@ -1,0 +1,27 @@
+# herdr-extensions skin: vscode-light — derived from VS Code's "Light Modern" default theme.
+#
+# Same format contract as vscode-dark-modern.toml — complete standalone TOML, split into raw lines
+# by bin/herdr-extensions rather than parsed generally. See that file's skin comments for why.
+[theme.custom]
+accent = "#005FB8"
+panel_bg = "#FFFFFF"
+surface0 = "#F3F3F3"
+surface1 = "#F8F8F8"
+surface_dim = "#E8E8E8"
+overlay0 = "#EDEDED"
+overlay1 = "#E0E0E0"
+text = "#3B3B3B"
+subtext0 = "#6E6E6E"
+mauve = "#AF00DB"
+green = "#008000"
+yellow = "#987116"
+red = "#CD3131"
+blue = "#005FB8"
+teal = "#267F99"
+peach = "#C2410C"
+
+[ui]
+accent = "#005FB8"
+pane_borders = true
+pane_gaps = false
+hide_tab_bar_when_single_tab = true

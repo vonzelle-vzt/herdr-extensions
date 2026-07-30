@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 HOME = os.path.expanduser("~")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,6 +37,18 @@ BIN_DIR = os.path.join(HOME, ".local", "bin")
 
 BEGIN = "# >>> herdr-extensions (managed) >>>"
 END = "# <<< herdr-extensions (managed) <<<"
+
+# Skin blocks are a SEPARATE managed region from the keybinding block above — distinct markers so
+# `skin reset` can never touch a keybinding, and `uninstall` can never touch a skin. See
+# apply_skin()/reset_skin() for why this is actually TWO spliced regions, not one.
+SKIN_BEGIN = "# >>> herdr-extensions skin >>>"
+SKIN_END = "# <<< herdr-extensions skin <<<"
+SKIN_UI_BEGIN = "# >>> herdr-extensions skin (ui) >>>"
+SKIN_UI_END = "# <<< herdr-extensions skin (ui) <<<"
+
+# Panel scripts shipped in libexec/ that get copied alongside open-panel.sh into the rendered
+# plugin directory (see render_plugin()) and wired up as [[panes]] + [[actions]] in the manifest.
+PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests"]
 
 # Keybindings we inject: (key, action id, human description).
 #
@@ -56,6 +68,12 @@ KEYS = [
     ("prefix+shift+e", "open-editor", "editor panel, left of the current pane (VS Code shift+cmd+E)"),
     ("prefix+shift+o", "open-editor-tab", "editor full-width in its own tab"),
     ("prefix+shift+s", "open-git", "lazygit source-control panel, below the current pane"),
+    ("prefix+shift+m", "open-problems", "Problems panel: tsc/eslint/ruff, below (VS Code shift+cmd+M)"),
+    ("prefix+shift+f", "open-search", "Search panel: ripgrep across the repo, below (VS Code shift+cmd+F)"),
+    ("prefix+t", "open-todo", "TODO/FIXME/HACK/XXX panel, below"),
+    ("prefix+shift+b", "open-blame", "Blame panel for the active file, below"),
+    ("prefix+shift+v", "open-markdown", "Markdown preview (glow) of the active file, below (VS Code shift+cmd+V)"),
+    ("prefix+shift+u", "open-tests", "Tests panel: vitest/jest/pytest, below"),
 ]
 
 # ---------------------------------------------------------------------------------------------
@@ -374,7 +392,8 @@ def render_plugin(dry, projects_root):
 
     src_manifest = os.path.join(REPO, "plugin", "herdr-plugin.toml")
     src_launcher = os.path.join(REPO, "plugin", "open-panel.sh")
-    for f in (src_manifest, src_launcher):
+    panel_srcs = [os.path.join(REPO, "libexec", n) for n in PANEL_SCRIPTS]
+    for f in [src_manifest, src_launcher] + panel_srcs:
         if not os.path.isfile(f):
             die("package file missing: %s" % f)
 
@@ -383,13 +402,15 @@ def render_plugin(dry, projects_root):
     launcher = open(src_launcher).read().replace("@@PROJECTS_ROOT@@", projects_root)
 
     if dry:
-        act("would write %s (spiceedit=%s, lazygit=%s)" % (PLUGIN_DST, spice, lazy))
+        act("would write %s (spiceedit=%s, lazygit=%s, %d panel scripts)"
+            % (PLUGIN_DST, spice, lazy, len(PANEL_SCRIPTS)))
         return False
 
     os.makedirs(PLUGIN_DST, exist_ok=True)
     changed = False
-    for name, body, mode in (("herdr-plugin.toml", manifest, 0o644),
-                             ("open-panel.sh", launcher, 0o755)):
+    files = [("herdr-plugin.toml", manifest, 0o644), ("open-panel.sh", launcher, 0o755)]
+    files += [(n, open(p).read(), 0o755) for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
+    for name, body, mode in files:
         dst = os.path.join(PLUGIN_DST, name)
         old = open(dst).read() if os.path.isfile(dst) else None
         if old != body:
@@ -502,6 +523,157 @@ def inject_keys(dry):
 
 
 # ---------------------------------------------------------------------------------------------
+# skins
+#
+# 🔴 WHY THIS IS TWO SPLICED BLOCKS, NOT ONE. The user's config.toml already has a bare [theme]
+# table (name/auto_switch) and a bare [ui] table (agent_panel_sort/...) OUTSIDE our markers. TOML
+# table headers are root-anchored regardless of where they appear, so a fresh, never-before-used
+# [theme.custom] header is safe to append anywhere — verified with tomllib. But [ui] is already
+# DECLARED, and TOML forbids declaring the same table twice via a header ("Cannot declare ('ui',)
+# twice"); a bare dotted key like `ui.accent = ...` written after ANY other header in the file does
+# NOT reach the root ui table either — dotted keys are relative to whichever table the most recent
+# header opened, so it silently nests inside whatever came right before it (verified: it landed
+# inside the last [[keys.command]] entry). The only place new `ui` keys can legally land is inside
+# the user's own existing [ui] body, before its next header — so that fragment is spliced in place,
+# immediately after the "[ui]" line, under its OWN marker pair, while [theme.custom] and everything
+# else stays in the normal end-of-file managed block.
+# ---------------------------------------------------------------------------------------------
+
+
+def skin_names():
+    d = os.path.join(REPO, "skins")
+    return sorted(os.path.splitext(os.path.basename(p))[0] for p in glob.glob(os.path.join(d, "*.toml")))
+
+
+def load_skin_sections(name):
+    """[theme.custom] and [ui] key=value lines from skins/<name>.toml.
+
+    Skin files are themselves complete, valid TOML (so they can be checked on their own with
+    `python3 -c "import tomllib; tomllib.load(...)"`), but the installer only needs the raw lines
+    under each section — it never parses TOML generally, matching the Python 3.9 / no-tomllib
+    constraint that applies everywhere else in this file.
+    """
+    path = os.path.join(REPO, "skins", "%s.toml" % name)
+    if not os.path.isfile(path):
+        die("unknown skin %r — available: %s" % (name, ", ".join(skin_names()) or "(none bundled)"))
+    theme_lines, ui_lines, cur = [], [], None
+    for raw in open(path).read().splitlines():
+        s = raw.strip()
+        if s == "[theme.custom]":
+            cur = "theme"
+            continue
+        if s == "[ui]":
+            cur = "ui"
+            continue
+        if s.startswith("["):
+            cur = None
+            continue
+        if not s or s.startswith("#"):
+            continue
+        if cur == "theme":
+            theme_lines.append(raw)
+        elif cur == "ui":
+            ui_lines.append(raw)
+    return theme_lines, ui_lines
+
+
+def _strip_skin_blocks(text):
+    text = re.sub(re.escape(SKIN_BEGIN) + r".*?" + re.escape(SKIN_END) + r"\n?", "", text, flags=re.S)
+    text = re.sub(re.escape(SKIN_UI_BEGIN) + r".*?" + re.escape(SKIN_UI_END) + r"\n?", "", text, flags=re.S)
+    return text
+
+
+def apply_skin(name, dry):
+    """Write (or refresh) the managed skin blocks. Idempotent: reapplying the same skin twice, or
+    switching from one skin to another, always starts from a clean baseline (skin blocks stripped
+    first) so no stale fragment is ever left behind."""
+    theme_lines, ui_lines = load_skin_sections(name)
+    old = open(HERDR_CFG).read() if os.path.isfile(HERDR_CFG) else ""
+    clean = _strip_skin_blocks(old)
+
+    ui_block = "\n".join([SKIN_UI_BEGIN,
+                          "# Managed by herdr-extensions (applied by `herdr-extensions skin %s`)." % name,
+                          "# `herdr-extensions skin reset` removes this along with the block below."]
+                         + ui_lines + [SKIN_UI_END]) + "\n"
+
+    m = re.search(r"(?m)^\[ui\][ \t]*$", clean)
+    if m:
+        nl = clean.find("\n", m.end())
+        at = nl + 1 if nl != -1 else len(clean)
+        clean = clean[:at] + ui_block + clean[at:]
+        ui_spliced = True
+    else:
+        ui_spliced = False
+
+    lines = [SKIN_BEGIN,
+             "# Managed by herdr-extensions. Edit above/below this block, not inside it —",
+             "# `herdr-extensions skin reset` removes exactly these lines (and, if present, the",
+             "# spliced-in ui block just inside your own [ui] section).",
+             "# Applied with: herdr-extensions skin %s" % name,
+             "",
+             "[theme.custom]"] + theme_lines
+    if not ui_spliced:
+        lines += ["", "[ui]"] + ui_lines
+    lines.append(SKIN_END)
+    block = "\n".join(lines) + "\n"
+
+    base = clean.rstrip("\n")
+    new = (base + "\n\n" + block) if base else block
+
+    if new == old:
+        act("skin '%s' already applied" % name)
+        return False
+    if dry:
+        act("would apply skin '%s' to %s" % (name, HERDR_CFG))
+        return True
+    os.makedirs(HERDR_CFG_DIR, exist_ok=True)
+    with open(HERDR_CFG, "w") as fh:
+        fh.write(new)
+    act("skin '%s' written to %s" % (name, HERDR_CFG))
+    return True
+
+
+def reset_skin(dry):
+    """Remove every managed skin block, restoring the file to what it was before any skin was
+    ever applied — byte-for-byte, mirroring how inject_keys/cmd_uninstall round-trip the
+    keybinding block."""
+    if not os.path.isfile(HERDR_CFG):
+        act("no config file — nothing to reset")
+        return False
+    old = open(HERDR_CFG).read()
+    new = _strip_skin_blocks(old)
+    new = re.sub(r"\n{3,}", "\n\n", new).rstrip("\n") + "\n" if new.strip() else new
+    if new == old:
+        act("no skin applied — nothing to reset")
+        return False
+    if dry:
+        act("would remove the applied skin from %s" % HERDR_CFG)
+        return True
+    with open(HERDR_CFG, "w") as fh:
+        fh.write(new)
+    act("skin reset — removed the managed skin block(s)")
+    return True
+
+
+def reload_config_best_effort():
+    """Ask the running herdr server to pick up the config change. Never `server stop` — that kills
+    every live pane including the user's agents. The CLI can be protocol-mismatched with an
+    already-running server (e.g. right after `brew upgrade`), so a failed reload is expected and
+    handled, not fatal: report it and tell the user the one command that fixes it."""
+    h = herdr_bin()
+    if not h:
+        warn("herdr not found on PATH — once it is, run `herdr server reload-config` yourself")
+        return
+    rc, out = run([h, "server", "reload-config"])
+    problem = server_error(out) if rc == 0 else "herdr did not respond"
+    if rc == 0 and not problem:
+        ok("herdr config reloaded")
+    else:
+        warn("could not reload herdr automatically (%s)" % (problem or "unknown error"))
+        print("        Run `herdr server reload-config` yourself once the server is reachable.")
+
+
+# ---------------------------------------------------------------------------------------------
 # dependencies
 # ---------------------------------------------------------------------------------------------
 
@@ -609,9 +781,15 @@ def cmd_install(args):
 
     head("Keybindings")
     inject_keys(args.dry_run)
+
+    if args.skin:
+        head("Skin")
+        if args.skin not in skin_names():
+            die("unknown skin %r — available: %s" % (args.skin, ", ".join(skin_names()) or "(none bundled)"))
+        apply_skin(args.skin, args.dry_run)
+
     if not args.dry_run:
-        run([herdr_bin(), "server", "reload-config"])
-        ok("herdr config reloaded")
+        reload_config_best_effort()
 
     if args.dry_run:
         return 0
@@ -808,6 +986,36 @@ def cmd_doctor(_args=None):
     return 0
 
 
+def cmd_skin(args):
+    names = skin_names()
+    if args.name in (None, "list"):
+        head("herdr-extensions skin list")
+        if not names:
+            warn("no skins bundled in %s" % os.path.join(REPO, "skins"))
+        else:
+            for n in names:
+                print("  %s" % n)
+            print("\n  Apply with `herdr-extensions skin <name>`; undo with `herdr-extensions skin reset`.")
+        return 0
+
+    if args.name == "reset":
+        head("herdr-extensions skin reset%s" % (" (dry run)" if args.dry_run else ""))
+        changed = reset_skin(args.dry_run)
+        if changed and not args.dry_run:
+            reload_config_best_effort()
+        return 0
+
+    if args.name not in names:
+        die("unknown skin %r — available: %s" % (args.name, ", ".join(names) or "(none bundled)"))
+
+    head("herdr-extensions skin %s%s" % (args.name, " (dry run)" if args.dry_run else ""))
+    changed = apply_skin(args.name, args.dry_run)
+    if changed and not args.dry_run:
+        reload_config_best_effort()
+        print("\n  Run `herdr-extensions skin reset` to go back to your previous colors.")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="herdr-extensions", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd")
@@ -819,7 +1027,16 @@ def main():
                    help="where the editor opens when you are not inside a git repo")
     p.add_argument("--force", action="store_true",
                    help="install even if our keybindings would override herdr built-ins")
+    p.add_argument("--skin", default=None,
+                   help="also apply a color skin (see `herdr-extensions skin list`); "
+                        "kept out of install unless passed")
     p.set_defaults(fn=cmd_install)
+
+    p = sub.add_parser("skin", help="apply or reset a bundled herdr color skin")
+    p.add_argument("name", nargs="?", default="list",
+                   help="skin name (see 'list'), or 'reset' to restore your previous colors")
+    p.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
+    p.set_defaults(fn=cmd_skin)
 
     p = sub.add_parser("uninstall", help="remove the plugin and managed keybindings")
     p.add_argument("--purge", action="store_true", help="also remove SpiceEdit configs")

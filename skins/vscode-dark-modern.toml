@@ -1,0 +1,31 @@
+# herdr-extensions skin: vscode-dark-modern — VS Code's "Dark Modern" default theme.
+#
+# This file is complete, valid TOML on its own (check it with
+# `python3 -c "import tomllib; tomllib.load(open('vscode-dark-modern.toml','rb'))"`), but
+# herdr-extensions never loads it as TOML — it splits out the [theme.custom] and [ui] key=value
+# lines as plain text and splices them into the user's config.toml. See apply_skin() in
+# bin/herdr-extensions for why that splicing is necessary (the user's own [theme]/[ui] tables
+# already exist, and TOML forbids redeclaring a table via a second header).
+[theme.custom]
+accent = "#007ACC"
+panel_bg = "#1F1F1F"
+surface0 = "#181818"
+surface1 = "#252526"
+surface_dim = "#141414"
+overlay0 = "#2B2B2B"
+overlay1 = "#3C3C3C"
+text = "#CCCCCC"
+subtext0 = "#9D9D9D"
+mauve = "#C586C0"
+green = "#6A9955"
+yellow = "#DCDCAA"
+red = "#F44747"
+blue = "#569CD6"
+teal = "#4EC9B0"
+peach = "#CE9178"
+
+[ui]
+accent = "#007ACC"
+pane_borders = true
+pane_gaps = false
+hide_tab_bar_when_single_tab = true

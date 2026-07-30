@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Markdown panel — `glow -s dark` on the ACTIVE file.
+#
+# Launched as a [[panes]] command by open-panel.sh (action open-markdown). Absolute path to glow
+# is mandatory (herdr execs pane commands under launchd's minimal PATH). Degrades to a raw `cat`
+# if glow is not installed, and to a message if there is no active file at all.
+set -uo pipefail
+
+PY=/usr/bin/python3
+ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+IFS=$'\t' read -r active_file active_line active_col active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print("\t".join([d.get("file") or "", str(d.get("line") or 1), str(d.get("col") or 1),
+                 d.get("root") or ""]))
+EOF
+)"
+
+if [ -z "$active_file" ] || [ ! -f "$active_file" ]; then
+  echo "No active file — SpiceEdit has not published one yet, or none is open."
+  echo "Open a Markdown file in the editor, then reopen this panel."
+  echo
+  echo "Press any key to close..."
+  IFS= read -r -n1 -s _ || true
+  exit 0
+fi
+
+case "$active_file" in
+  *.md|*.mdx|*.markdown) : ;;
+  *) echo "Active file is not Markdown: $active_file (showing it anyway)"; echo ;;
+esac
+
+GLOW=""
+for d in /opt/homebrew/bin /usr/local/bin; do
+  if [ -x "$d/glow" ]; then
+    GLOW="$d/glow"
+    break
+  fi
+done
+
+if [ -n "$GLOW" ]; then
+  "$GLOW" -s dark "$active_file"
+else
+  echo "glow not found in /opt/homebrew/bin or /usr/local/bin — showing the raw file instead."
+  echo
+  cat -- "$active_file"
+fi
+
+echo
+echo "Press any key to close..."
+IFS= read -r -n1 -s _ || true

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# TODO panel — ripgrep for TODO|FIXME|HACK|XXX across the repo root, grouped by file.
+#
+# Launched as a [[panes]] command by open-panel.sh (action open-todo). Absolute path to rg is
+# mandatory: `rg` is ALSO a shell function on this machine, so execve (which is what herdr does
+# under launchd's minimal PATH) needs /opt/homebrew/bin/rg explicitly.
+set -uo pipefail
+
+GIT=/usr/bin/git
+PY=/usr/bin/python3
+ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+IFS=$'\t' read -r active_file active_line active_col active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print("\t".join([d.get("file") or "", str(d.get("line") or 1), str(d.get("col") or 1),
+                 d.get("root") or ""]))
+EOF
+)"
+
+repo="$active_root"
+if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+  base="${active_file:-$PWD}"
+  dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
+  repo="$("$GIT" -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$repo" ] || repo="$dir"
+fi
+
+RG=""
+for d in /opt/homebrew/bin /usr/local/bin; do
+  if [ -x "$d/rg" ]; then
+    RG="$d/rg"
+    break
+  fi
+done
+
+echo "TODO / FIXME / HACK / XXX — $repo"
+echo
+
+if [ -z "$RG" ]; then
+  echo "ripgrep (rg) not found in /opt/homebrew/bin or /usr/local/bin — install it to scan for TODOs."
+else
+  "$RG" --line-number --no-heading --color never -e "TODO|FIXME|HACK|XXX" "$repo" 2>/dev/null \
+    | "$PY" - <<'EOF'
+import collections, sys
+
+groups = collections.OrderedDict()
+for line in sys.stdin:
+    parts = line.rstrip("\n").split(":", 2)
+    if len(parts) != 3:
+        continue
+    f, ln, text = parts
+    groups.setdefault(f, []).append((ln, text.strip()))
+
+if not groups:
+    print("No TODO/FIXME/HACK/XXX markers found.")
+else:
+    total = 0
+    for f, hits in groups.items():
+        print(f)
+        for ln, text in hits:
+            print("  %s: %s" % (ln, text))
+            total += 1
+    print()
+    print("%d marker(s) across %d file(s)" % (total, len(groups)))
+EOF
+fi
+
+echo
+echo "Press any key to close..."
+IFS= read -r -n1 -s _ || true

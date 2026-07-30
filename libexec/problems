@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Problems panel — runs tsc/eslint/ruff for the current repo (whichever are available and
+# configured) and prints their diagnostics grouped by file, file:line:col first.
+#
+# Launched as a [[panes]] command by open-panel.sh (see plugin/herdr-plugin.toml, action
+# open-problems). Reads the ACTIVE FILE CONTRACT only to find the repo root; the panel itself is
+# repo-scoped, not file-scoped. Absolute paths throughout: herdr execs pane commands under
+# launchd's minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin), which has neither /opt/homebrew/bin nor
+# a vendored node_modules/.bin on it.
+set -uo pipefail
+
+GIT=/usr/bin/git
+PY=/usr/bin/python3
+ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+IFS=$'\t' read -r active_file active_line active_col active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print("\t".join([d.get("file") or "", str(d.get("line") or 1), str(d.get("col") or 1),
+                 d.get("root") or ""]))
+EOF
+)"
+
+repo="$active_root"
+if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+  base="${active_file:-$PWD}"
+  dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
+  repo="$("$GIT" -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$repo" ] || repo="$dir"
+fi
+
+echo "Problems — $repo"
+echo
+
+find_node_bin() {   # find_node_bin <name>  -- walk up from $repo for a vendored node_modules/.bin
+  local dir="$repo" name="$1"
+  while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+    if [ -x "$dir/node_modules/.bin/$name" ]; then
+      printf '%s' "$dir/node_modules/.bin/$name"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+find_abs() {   # find_abs <name>  -- common absolute install locations, launchd PATH has none of them
+  local name="$1" d
+  for d in /opt/homebrew/bin /usr/local/bin /usr/bin /bin; do
+    if [ -x "$d/$name" ]; then
+      printf '%s' "$d/$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+tsc_out=""
+if [ -f "$repo/tsconfig.json" ]; then
+  tsc_bin="$(find_node_bin tsc || true)"
+  if [ -n "$tsc_bin" ]; then
+    tsc_out="$("$tsc_bin" --noEmit --pretty false -p "$repo" 2>&1 || true)"
+  else
+    echo "tsc: tsconfig.json present but no vendored tsc in node_modules/.bin (run npm/pnpm/yarn install)"
+  fi
+fi
+
+eslint_json=""
+eslint_bin="$(find_node_bin eslint || true)"
+if [ -n "$eslint_bin" ]; then
+  eslint_json="$("$eslint_bin" "$repo" --format json 2>/dev/null || true)"
+fi
+
+ruff_json=""
+ruff_bin="$(find_abs ruff || true)"
+if [ -z "$ruff_bin" ] && [ -x "$repo/.venv/bin/ruff" ]; then
+  ruff_bin="$repo/.venv/bin/ruff"
+fi
+if [ -n "$ruff_bin" ] && { [ -f "$repo/pyproject.toml" ] || [ -f "$repo/ruff.toml" ] || [ -f "$repo/.ruff.toml" ]; }; then
+  ruff_json="$("$ruff_bin" check "$repo" --output-format json 2>/dev/null || true)"
+fi
+
+"$PY" - "$tsc_out" "$eslint_json" "$ruff_json" <<'EOF'
+import json, re, sys
+
+tsc_out, eslint_json, ruff_json = sys.argv[1:4]
+items = []  # (file, line, col, message, tool)
+
+for line in tsc_out.splitlines():
+    m = re.match(r"^(.+?)\((\d+),(\d+)\): (.+)$", line)
+    if m:
+        items.append((m.group(1), int(m.group(2)), int(m.group(3)), m.group(4), "tsc"))
+
+if eslint_json.strip():
+    try:
+        for f in json.loads(eslint_json):
+            for msg in f.get("messages", []):
+                items.append((f.get("filePath", ""), msg.get("line", 0), msg.get("column", 0),
+                              msg.get("message", ""), "eslint"))
+    except Exception:
+        pass
+
+if ruff_json.strip():
+    try:
+        for d in json.loads(ruff_json):
+            loc = d.get("location", {})
+            items.append((d.get("filename", ""), loc.get("row", 0), loc.get("column", 0),
+                          d.get("message", ""), "ruff"))
+    except Exception:
+        pass
+
+if not items:
+    print("No problems found (or no configured linter/tsc is available for this repo).")
+else:
+    by_file = {}
+    for it in items:
+        by_file.setdefault(it[0], []).append(it)
+    for f in sorted(by_file):
+        print(f)
+        for _f, ln, col, msg, tool in sorted(by_file[f], key=lambda x: (x[1], x[2])):
+            print("  %d:%d  [%s]  %s" % (ln, col, tool, msg))
+    print()
+    print("%d problem(s) across %d file(s)" % (len(items), len(by_file)))
+EOF
+
+echo
+echo "Press any key to close..."
+IFS= read -r -n1 -s _ || true

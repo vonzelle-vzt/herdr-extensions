@@ -22,8 +22,8 @@
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
 id = "herdr-extensions"
 name = "herdr-extensions"
-version = "0.2.0"
-description = "Tiny VS Code for herdr: SpiceEdit editor panel + lazygit source-control panel."
+version = "0.3.0"
+description = "Tiny VS Code for herdr: editor + lazygit + problems/search/todo/blame/markdown/tests panels."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
 
@@ -51,6 +51,51 @@ id = "git"
 title = "Git"
 placement = "split"
 command = ["@@LAZYGIT@@"]
+
+# ---------------------------------------------------------------------------------------------
+# Panel bundle. Each is a plain bash script in libexec/, copied next to open-panel.sh at install
+# time (see render_plugin() in bin/herdr-extensions) and referenced here by that same relative
+# path — herdr execs [[panes]] commands with the plugin directory as cwd, same as `open-panel.sh`
+# itself, so no @@-templating is needed for these (only spiceedit/lazygit are external binaries
+# that need an absolute, machine-specific path). Every script prints to stdout and then waits for
+# a keypress so the pane persists; it closes when the script exits.
+# ---------------------------------------------------------------------------------------------
+
+[[panes]]
+id = "problems"
+title = "Problems"
+placement = "split"
+command = ["bash", "problems"]
+
+[[panes]]
+id = "search"
+title = "Search"
+placement = "split"
+command = ["bash", "search"]
+
+[[panes]]
+id = "todo"
+title = "TODO"
+placement = "split"
+command = ["bash", "todo"]
+
+[[panes]]
+id = "blame"
+title = "Blame"
+placement = "split"
+command = ["bash", "blame"]
+
+[[panes]]
+id = "markdown"
+title = "Markdown"
+placement = "split"
+command = ["bash", "markdown"]
+
+[[panes]]
+id = "tests"
+title = "Tests"
+placement = "split"
+command = ["bash", "tests"]
 
 # ---------------------------------------------------------------------------------------------
 # Actions. open-panel.sh args:
@@ -89,6 +134,53 @@ platforms = ["linux", "macos"]
 title = "Git panel (lazygit)"
 description = "Toggle lazygit in a split below the current pane, rooted at the repo."
 command = ["bash", "open-panel.sh", "git", "Git", "split", "down", "key", "no", "0.35"]
+
+# ---------------------------------------------------------------------------------------------
+# Panel bundle actions. All bottom panels (direction=down, swap=no), same shape as open-git above:
+# a persistent VS-Code-style output panel rather than a left/right editor-adjacent split.
+# ---------------------------------------------------------------------------------------------
+
+[[actions]]
+id = "open-problems"
+platforms = ["linux", "macos"]
+title = "Problems panel"
+description = "Toggle tsc/eslint/ruff diagnostics for the repo in a split below the current pane."
+command = ["bash", "open-panel.sh", "problems", "Problems", "split", "down", "key", "no", "0.35"]
+
+[[actions]]
+id = "open-search"
+platforms = ["linux", "macos"]
+title = "Search panel"
+description = "Toggle a ripgrep search across the repo in a split below the current pane."
+command = ["bash", "open-panel.sh", "search", "Search", "split", "down", "key", "no", "0.35"]
+
+[[actions]]
+id = "open-todo"
+platforms = ["linux", "macos"]
+title = "TODO panel"
+description = "Toggle a TODO/FIXME/HACK/XXX scan of the repo in a split below the current pane."
+command = ["bash", "open-panel.sh", "todo", "TODO", "split", "down", "key", "no", "0.35"]
+
+[[actions]]
+id = "open-blame"
+platforms = ["linux", "macos"]
+title = "Blame panel"
+description = "Toggle git log/blame for the ACTIVE file in a split below the current pane."
+command = ["bash", "open-panel.sh", "blame", "Blame", "split", "down", "key", "no", "0.35"]
+
+[[actions]]
+id = "open-markdown"
+platforms = ["linux", "macos"]
+title = "Markdown preview"
+description = "Toggle a glow preview of the ACTIVE file in a split below the current pane."
+command = ["bash", "open-panel.sh", "markdown", "Markdown", "split", "down", "key", "no", "0.35"]
+
+[[actions]]
+id = "open-tests"
+platforms = ["linux", "macos"]
+title = "Tests panel"
+description = "Toggle the repo's vitest/jest/pytest run in a split below the current pane."
+command = ["bash", "open-panel.sh", "tests", "Tests", "split", "down", "key", "no", "0.35"]
 
 # ---------------------------------------------------------------------------------------------
 # Auto-open the editor for every new workspace/project, so a project always comes up VS-Code-shaped

@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Tests panel — detects vitest/jest (from package.json) or pytest (from pyproject.toml/pytest.ini/
+# setup.cfg) and runs it for the repo.
+#
+# Launched as a [[panes]] command by open-panel.sh (action open-tests). Absolute paths throughout:
+# herdr execs pane commands under launchd's minimal PATH, which has neither /opt/homebrew/bin nor
+# a vendored node_modules/.bin on it.
+set -uo pipefail
+
+GIT=/usr/bin/git
+PY=/usr/bin/python3
+ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+IFS=$'\t' read -r active_file active_line active_col active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print("\t".join([d.get("file") or "", str(d.get("line") or 1), str(d.get("col") or 1),
+                 d.get("root") or ""]))
+EOF
+)"
+
+repo="$active_root"
+if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+  base="${active_file:-$PWD}"
+  dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
+  repo="$("$GIT" -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$repo" ] || repo="$dir"
+fi
+
+find_node_bin() {   # find_node_bin <name>  -- walk up from $repo for a vendored node_modules/.bin
+  local dir="$repo" name="$1"
+  while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+    if [ -x "$dir/node_modules/.bin/$name" ]; then
+      printf '%s' "$dir/node_modules/.bin/$name"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+find_abs() {   # find_abs <name>  -- common absolute install locations
+  local name="$1" d
+  for d in /opt/homebrew/bin /usr/local/bin /usr/bin /bin; do
+    if [ -x "$d/$name" ]; then
+      printf '%s' "$d/$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+echo "Tests — $repo"
+echo
+
+ran=0
+
+if [ -f "$repo/package.json" ]; then
+  pkg="$(cat "$repo/package.json" 2>/dev/null)"
+  runner=""
+  case "$pkg" in
+    *'"vitest"'*) runner=vitest ;;
+    *'"jest"'*) runner=jest ;;
+  esac
+  if [ -n "$runner" ]; then
+    bin="$(find_node_bin "$runner" || true)"
+    if [ -n "$bin" ]; then
+      echo "== $runner =="
+      case "$runner" in
+        vitest) ( cd "$repo" && "$bin" run 2>&1 ) || true ;;
+        jest)   ( cd "$repo" && "$bin" 2>&1 ) || true ;;
+      esac
+      ran=1
+    else
+      echo "$runner is referenced in package.json but not vendored in node_modules/.bin"
+      echo "(run npm/pnpm/yarn install first)"
+    fi
+  fi
+fi
+
+if [ -f "$repo/pyproject.toml" ] || [ -f "$repo/pytest.ini" ] || [ -f "$repo/setup.cfg" ]; then
+  py_bin="$(find_abs pytest || true)"
+  if [ -z "$py_bin" ] && [ -x "$repo/.venv/bin/pytest" ]; then
+    py_bin="$repo/.venv/bin/pytest"
+  fi
+  if [ -n "$py_bin" ]; then
+    echo "== pytest =="
+    ( cd "$repo" && "$py_bin" -q 2>&1 ) || true
+    ran=1
+  else
+    echo "pytest config found but no pytest binary in .venv/bin or the usual absolute locations"
+  fi
+fi
+
+if [ "$ran" = "0" ]; then
+  echo "No recognized test runner (vitest/jest/pytest) detected for this repo."
+fi
+
+echo
+echo "Press any key to close..."
+IFS= read -r -n1 -s _ || true
