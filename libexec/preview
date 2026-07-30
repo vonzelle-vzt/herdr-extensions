@@ -29,6 +29,14 @@ CHROME="@@CHROME@@"
 ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
 SHOT_DIR="$HOME/.vzt/preview"
 
+# The runtime-diagnostics log the Problems panel reads. Stable path, alongside the rest of our
+# state (active.json's sibling), NOT under SHOT_DIR: SHOT_DIR is scratch (screenshots, the Chrome
+# profile) and gets blown away casually, while this needs to be found by a second, independent
+# script. Overwritten whole on every render cycle rather than appended -- its mtime IS the
+# freshness signal Problems uses to decide whether a preview session is still live.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-extensions"
+CONSOLE_LOG="$STATE_DIR/preview-console.log"
+
 # Refresh cadence. Long enough that a screenshot is not thrashing the CPU, short enough that a save
 # shows up without thinking about it. Overridable so a slow app can back off.
 INTERVAL="${HERDR_PREVIEW_INTERVAL:-4}"
@@ -106,7 +114,9 @@ case "${TERM_PROGRAM:-}" in
 esac
 
 mkdir -p "$SHOT_DIR" 2>/dev/null || true
+mkdir -p "$STATE_DIR" 2>/dev/null || true
 SHOT="$SHOT_DIR/preview.png"
+CONSOLE_STDERR="$SHOT_DIR/chrome-console.stderr"
 
 # Match the capture to the pane so the page is laid out at the shape it will be displayed at, rather
 # than being captured wide and squashed. Cells are roughly twice as tall as they are wide; 12x24 px
@@ -137,9 +147,60 @@ kill_our_chrome() {
 # Never leave a process tree behind, however this panel exits.
 trap kill_our_chrome EXIT INT TERM
 
+# Parse the CONSOLE lines out of a captured Chrome stderr and write them to CONSOLE_LOG.
+# THE MECHANISM: --enable-logging=stderr --v=1 makes headless Chrome print both console.error
+# output and uncaught exceptions to stderr, one per line, shaped like:
+#   [pid:tid:MMDD/HHMMSS.uuuuuu:INFO:CONSOLE:LINE] "MESSAGE", source: URL (LINE)
+# No CDP client, no websocket -- this is the whole mechanism, confirmed against real Chrome.
+# Overwritten (not appended) every cycle, even when empty: the file's mtime is the freshness
+# signal, and a render with zero console errors should say so by going quiet, not by going stale.
+parse_console_log() {
+  stderr_file="$1"
+  "$PY" - "$stderr_file" "$CONSOLE_LOG" <<'EOF'
+import re
+import sys
+
+stderr_path, log_path = sys.argv[1:3]
+try:
+    with open(stderr_path, errors="replace") as f:
+        text = f.read()
+except OSError:
+    text = ""
+
+# Greedy .* backtracks to the RIGHTMOST place the rest of the pattern still matches, which is
+# exactly what handles a message containing its own quotes or ", source: "-like text -- the
+# tail anchor (URL + line number + end of line) is unambiguous even when the message is not.
+# The pattern is assembled around chr(34) rather than written as one literal because a literal
+# would need an apostrophe to quote the embedded double quotes -- and no apostrophe may appear
+# inside a heredoc in this repo (bash 3.2 mis-parses one nested in $( ), and oracle 16b enforces
+# the rule everywhere rather than trying to guess which heredocs are nested).
+Q = chr(34)
+pat = re.compile(r"^\[[^\]]*:CONSOLE:\d+\]\s+" + Q + r"(.*)" + Q + r",\s+source:\s+(\S+)\s+\((\d+)\)\s*$")
+records = []
+for raw in text.splitlines():
+    m = pat.match(raw.strip())
+    if not m:
+        continue
+    msg, src_url, line = m.group(1), m.group(2), m.group(3)
+    # \x1f is the field separator the Problems panel splits on -- never a literal newline or \x1f
+    # inside the message itself, or one bad console.error would corrupt every record after it.
+    msg = msg.replace("\x1f", " ").replace("\n", " ")
+    records.append(src_url + "\x1f" + line + "\x1f" + msg)
+
+try:
+    with open(log_path, "w") as out:
+        out.write("\n".join(records))
+        if records:
+            out.write("\n")
+except OSError:
+    pass
+EOF
+}
+
 render_once() {
   url="$1"
   rm -f "$SHOT"
+  : > "$CONSOLE_STDERR"
   # --headless=new is the supported mode; the old one prints a deprecation banner and eventually
   # stops working. A dedicated user-data-dir keeps this out of the real profile so it never touches
   # the user's live session or fights a running Chrome for the singleton lock.
@@ -148,11 +209,13 @@ render_once() {
     --disable-gpu \
     --hide-scrollbars \
     --no-first-run \
+    --enable-logging=stderr \
+    --v=1 \
     --user-data-dir="$SHOT_DIR/chrome-profile" \
     --virtual-time-budget=3000 \
     --window-size="$shot_w,$shot_h" \
     --screenshot="$SHOT" \
-    "$url" >/dev/null 2>&1 &
+    "$url" >/dev/null 2>"$CONSOLE_STDERR" &
   chrome_pid=$!
 
   waited=0
@@ -171,6 +234,10 @@ render_once() {
   done
   kill_our_chrome
   wait "$chrome_pid" 2>/dev/null || true
+
+  # Every cycle, screenshot or not -- a page that throws before it ever paints is exactly the case
+  # runtime diagnostics exists for.
+  parse_console_log "$CONSOLE_STDERR"
 
   if [ ! -s "$SHOT" ]; then
     echo "Chrome produced no screenshot for $url"

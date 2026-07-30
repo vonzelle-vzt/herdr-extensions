@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.9.2"
+VERSION = "0.10.0"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -53,7 +53,7 @@ SKIN_UI_END = "# <<< herdr-extensions skin (ui) <<<"
 
 # Panel scripts shipped in libexec/ that get copied alongside open-panel.sh into the rendered
 # plugin directory (see render_plugin()) and wired up as [[panes]] + [[actions]] in the manifest.
-PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests", "debug", "preview"]
+PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests", "debug", "preview", "review"]
 
 # Keybindings we inject: (key, action id, human description).
 #
@@ -85,6 +85,9 @@ KEYS = [
     # Images: stage the clipboard image (or newest screenshot) and type its path to the agent.
     ("prefix+shift+a", "open-preview", "Preview panel: render the dev server (app) in a pane"),
     ("prefix+i", "paste-image", "paste an image/screenshot path to the agent"),
+    # prefix+shift+c is free against herdr's 39 reserved bindings; prefix+r and prefix+shift+r are
+    # BOTH taken (prefix+r is herdr's only resize binding) so neither was an option here.
+    ("prefix+shift+k", "open-review", "Review panel: comment on the agent's diff and send it back"),
     ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
     ("prefix+shift+h", "resize-narrower", "move the split divider left one step"),
 ]
@@ -584,6 +587,95 @@ def inject_keys(dry):
 
 
 # ---------------------------------------------------------------------------------------------
+# lazygit AI-commit custom command
+#
+# lazygit runs as a plugin pane too (the "git" [[panes]] entry above), so a customCommand it
+# invokes is exec'd by the herdr server under launchd's PATH exactly like every panel/action in
+# this package -- a bare `claude` would silently never resolve. Same fix as everywhere else: an
+# absolute path baked in at install time, spliced in as its own marker-delimited region so
+# `uninstall` removes exactly it and nothing the user added themselves.
+# ---------------------------------------------------------------------------------------------
+
+LAZYGIT_BEGIN = "# >>> herdr-extensions lazygit (managed) >>>"
+LAZYGIT_END = "# <<< herdr-extensions lazygit (managed) <<<"
+
+
+def lazygit_config_path():
+    """Where lazygit reads its own config.yml, per lazygit's own docs."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return os.path.join(xdg, "lazygit", "config.yml")
+    if sys.platform == "darwin":
+        return os.path.join(HOME, "Library", "Application Support", "lazygit", "config.yml")
+    return os.path.join(HOME, ".config", "lazygit", "config.yml")
+
+
+def lazygit_ai_commit_block(claude_bin):
+    """The managed customCommands fragment, marker-delimited like every other splice here.
+
+    🔴 This is a root-level `customCommands:` key appended at the end of the file. If the user's
+    OWN config.yml already declares a top-level customCommands: list somewhere else, YAML keeps
+    only the LAST mapping for a duplicate key, so this block wins and theirs is shadowed rather
+    than merged -- the same trade-off apply_skin() documents for the [ui] table, and for the same
+    reason: a real YAML parser is out of scope (stdlib-only Python 3.9, no pyyaml).
+    """
+    cmd = ('git commit -e -m "$(git diff --cached | "%s" -p '
+           '"Write a single-line, imperative git commit subject (max 72 characters, no trailing '
+           'period) that summarizes this staged diff. Output ONLY the subject line, '
+           'nothing else.")"' % claude_bin)
+    lines = [
+        LAZYGIT_BEGIN,
+        "# Managed by herdr-extensions. Edit above/below this block, not inside it --",
+        "# `herdr-extensions uninstall` removes exactly these lines and nothing else.",
+        "# NOTE: if you already have your own top-level customCommands: list elsewhere in this",
+        "# file, YAML keeps only the LAST one and this block wins -- fold your entries into this",
+        "# one instead of relying on both being merged.",
+        "customCommands:",
+        "  - key: '<c-a>'",
+        "    context: files",
+        "    description: 'AI: draft commit message from the staged diff'",
+        "    loadingText: 'Asking claude for a commit message...'",
+        "    command: '%s'" % cmd.replace("'", "''"),
+        LAZYGIT_END,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_lazygit_ai_commit(dry):
+    """Splice a lazygit customCommand that drafts a commit subject from the staged diff.
+
+    Additive, not required: if `claude` is not on this machine, warn and skip rather than fail the
+    whole install over one optional step.
+    """
+    claude_bin = which("claude")
+    if not claude_bin:
+        warn("`claude` CLI not found -- skipping the lazygit AI-commit command "
+             "(install it and re-run to add it)")
+        return False
+    path = lazygit_config_path()
+    block = lazygit_ai_commit_block(claude_bin)
+    old = open(path).read() if os.path.isfile(path) else ""
+    pat = re.compile(re.escape(LAZYGIT_BEGIN) + r".*?" + re.escape(LAZYGIT_END) + r"\n?", re.S)
+    if pat.search(old):
+        new = pat.sub(block, old)
+    else:
+        base = old.rstrip("\n")
+        new = (base + "\n\n" + block) if base else block
+    if new == old:
+        act("lazygit AI-commit command already current")
+        return False
+    if dry:
+        act("would %s the lazygit AI-commit command in %s"
+            % ("refresh" if pat.search(old) else "append", path))
+        return True
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(new)
+    act("lazygit AI-commit command written (%s)" % path)
+    return True
+
+
+# ---------------------------------------------------------------------------------------------
 # skins
 #
 # 🔴 WHY THIS IS TWO SPLICED BLOCKS, NOT ONE. The user's config.toml already has a bare [theme]
@@ -896,6 +988,9 @@ def cmd_install(args):
     head("Keybindings")
     inject_keys(args.dry_run)
 
+    head("lazygit AI commit")
+    write_lazygit_ai_commit(args.dry_run)
+
     if args.skin:
         head("Skin")
         if args.skin not in skin_names():
@@ -935,6 +1030,18 @@ def cmd_uninstall(args):
             ok("removed managed keybindings (your own settings untouched)")
         else:
             ok("no managed keybindings present")
+
+    lg_path = lazygit_config_path()
+    if os.path.isfile(lg_path):
+        old = open(lg_path).read()
+        new = re.sub(re.escape(LAZYGIT_BEGIN) + r".*?" + re.escape(LAZYGIT_END) + r"\n?", "", old, flags=re.S)
+        new = re.sub(r"\n{3,}", "\n\n", new).rstrip("\n") + "\n"
+        if new != old:
+            with open(lg_path, "w") as fh:
+                fh.write(new)
+            ok("removed the lazygit AI-commit command (your own lazygit config untouched)")
+        else:
+            ok("no managed lazygit command present")
 
     if os.path.isdir(PLUGIN_DST):
         shutil.rmtree(PLUGIN_DST)

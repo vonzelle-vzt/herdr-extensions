@@ -13,6 +13,11 @@ GIT=/usr/bin/git
 PY=/usr/bin/python3
 ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
 
+# Same stable path libexec/preview writes to. Its mtime is the freshness signal: a preview panel
+# nobody has open should not make this panel shout about a page that is not being looked at.
+CONSOLE_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-extensions/preview-console.log"
+CONSOLE_LOG_MAX_AGE="${HERDR_PREVIEW_LOG_MAX_AGE:-120}"
+
 # NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so
 # bash collapses runs of it and strips leading/trailing fields — with no file open the
 # payload starts with an empty field and every value silently shifts left, putting the line
@@ -128,6 +133,80 @@ else:
             print("  %d:%d  [%s]  %s" % (ln, col, tool, msg))
     print()
     print("%d problem(s) across %d file(s)" % (len(items), len(by_file)))
+EOF
+
+# ---- runtime diagnostics, from the Preview panel's console log ---------------------------------
+# Absence is not an error: no log, or a stale one, means nobody has the Preview panel open right
+# now, and a panel that shouts about a preview nobody opened is noise -- print nothing extra.
+"$PY" - "$CONSOLE_LOG" "$CONSOLE_LOG_MAX_AGE" "$repo" <<'EOF'
+import os
+import sys
+import time
+
+log_path, max_age_raw, repo = sys.argv[1:4]
+try:
+    max_age = float(max_age_raw)
+except ValueError:
+    max_age = 120.0
+
+try:
+    mtime = os.path.getmtime(log_path)
+except OSError:
+    sys.exit(0)  # missing: silent
+
+if (time.time() - mtime) > max_age:
+    sys.exit(0)  # stale: silent
+
+try:
+    with open(log_path, errors="replace") as f:
+        raw_lines = [l for l in f.read().split("\n") if l]
+except OSError:
+    raw_lines = []
+
+records = []
+for line in raw_lines:
+    parts = line.split("\x1f")
+    if len(parts) != 3:
+        continue
+    url, lineno, msg = parts
+    records.append((url, lineno, msg))
+
+if not records:
+    sys.exit(0)  # a live preview with nothing to report: also silent
+
+
+def map_path(url):
+    # Strip scheme://host[:port] and treat the remainder as repo-relative; only report the
+    # rewritten path if it actually resolves to a file, otherwise fall back to the raw URL.
+    m = re_match(url)
+    rest = (m.group(1) or "/") if m else url
+    rest = rest.lstrip("/")
+    if not rest:
+        return None
+    candidate = os.path.join(repo, rest)
+    if os.path.isfile(candidate):
+        return os.path.relpath(candidate, repo)
+    return None
+
+
+def re_match(url):
+    import re
+    return re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://[^/]+(/.*)?$", url)
+
+
+by_loc = {}
+for url, lineno, msg in records:
+    loc = map_path(url) or url
+    by_loc.setdefault(loc, []).append((lineno, msg))
+
+print()
+print("-- Runtime (Preview) --")
+for loc in sorted(by_loc):
+    print(loc)
+    for lineno, msg in sorted(by_loc[loc], key=lambda x: int(x[0]) if x[0].isdigit() else 0):
+        print("  %s:1  [runtime]  %s" % (lineno, msg))
+print()
+print("%d runtime problem(s) across %d location(s)" % (len(records), len(by_loc)))
 EOF
 
 echo

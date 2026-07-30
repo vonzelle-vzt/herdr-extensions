@@ -1,6 +1,6 @@
 # herdr-extensions — PRD
 
-**Status:** shipped, v0.9.1 · **Owner:** vonzelle-vzt · **Last reviewed:** 2026-07-30
+**Status:** shipped, v0.10.0 · **Owner:** vonzelle-vzt · **Last reviewed:** 2026-07-30
 
 [SPEC.md](../SPEC.md) is the engineering authority — every design decision and the bug it prevents.
 This document is the *product* view: who it is for, what problem it solves, what is deliberately out
@@ -66,6 +66,9 @@ navigable are missing precisely where an agent is doing the navigating.**
 | Debug | `ctrl+b d` | parses `.vscode/launch.json` (JSONC), hands to an installed adapter |
 | **Live preview** | `ctrl+b shift+a` | headless Chrome screenshot rendered inline, auto-refreshing |
 | **Image / screenshot paste** | `ctrl+b i` | stages a clipboard image, types its path to the agent |
+| **Review the agent's diff** | `ctrl+b shift+k` | cite `path:line`, collect notes, one key sends them all to the agent pane |
+| **Runtime diagnostics** | in the Problems panel | console errors + uncaught exceptions from the app Preview is driving, mapped to `file:line` |
+| **AI commit messages** | in `lazygit` | a custom command drafting a subject from the staged diff via the local `claude` CLI |
 | Divider nudge | `ctrl+b shift+l/h` | works around the absence of mouse divider drag |
 | VS Code skin | `herdr-extensions skin` | herdr's own chrome, two variants + reset |
 | Format-on-save resolver | `herdr-fmt` | vendored prettier wins over global, monorepo-safe |
@@ -78,13 +81,10 @@ whose whole premise is composing with a pane multiplexer.
 
 | Gap | Who does it today | Standing |
 | --- | --- | --- |
-| **Review an agent's diff, comment on lines, send the notes back** | [reviewr](https://github.com/persiyanov/herdr-reviewr) (283★) | The single biggest hole. It is the loop herdr exists for, and we have none of it. Planned. |
-| **A diff view in the editor** | [file-viewer](https://github.com/smarzban/herdr-file-viewer) (290★) — auto view per file, merge-base ⇄ `HEAD` baseline flip | We have gutter markers and a hunk preview, not a diff. Planned; feeds the review panel. |
+| **A diff view in the editor** | [file-viewer](https://github.com/smarzban/herdr-file-viewer) (290★) — auto view per file, merge-base ⇄ `HEAD` baseline flip | The Review panel renders a diff; the *editor* still has only gutter markers and a hunk preview. Would upgrade Review from typed `path:line` refs to cursor selection. |
 | **Inline git blame** on the cursor line | GitLens, in a GUI | Editor-side, owed upstream too. Planned. |
 | **A command palette** | [herdr-command-palette](https://github.com/JanTvrdik/herdr-command-palette) | We have a fuzzy *file* finder but no fuzzy *command* search. Planned; the finder and the action tables both already exist. |
 | **LSP autocomplete** | nobody in this marketplace | The largest remaining "tiny VS Code" absence. Transport, UTF-16 conversion and the server registry are all in place. |
-| **AI commit messages** | [sidebar](https://github.com/alexarthurs/herdr-sidebar) | A lazygit custom command away. |
-| **Runtime diagnostics** — errors from the *running* app, mapped to `file:line` | [herdr-flutter](https://github.com/ablause/herdr-flutter) (live `Flutter.Error` + widget tree), [StructuPath/herdr-browser](https://github.com/StructuPath/herdr-browser) (console + page errors) | Problems is static analysis only. We already own both halves — Preview is pointed at the running app and Problems is the panel that lists faults — and nothing connects them. Strongest unclaimed extension of what we have. |
 | **Cross-file replace with preview** | — | The editor now has replace and a match-preview API; driving it repo-wide from the Search panel is not wired. |
 
 ### Deliberately out of scope, permanently
@@ -148,21 +148,23 @@ These are not preferences; they are properties of the environment that have each
 
 ## 7. How we know it works
 
-25 numbered oracles in [SPEC.md](../SPEC.md). `live-check.sh` is the gate; it adds its own live
+26 numbered oracles in [SPEC.md](../SPEC.md). `live-check.sh` is the gate; it adds its own live
 oracles and runs all six offline suites plus the sizing sweep:
 
 | Suite | Oracles | Needs a server? |
 | --- | --- | --- |
 | `live-check.sh` | its own live checks, then delegates to every row below | yes |
-| `check-panels.sh` | 28 | no |
+| `check-panels.sh` | 31 | no |
 | `check-viability.sh` | 7 | no |
 | `check-project-resolve.sh` | 7 | no |
 | `check-image-paste.sh` | 11 | no |
+| `check-review.sh` | 15 | no |
+| `check-runtime-diagnostics.sh` | 11 | no |
 | `check-preview.sh` | 8 | no |
 | `check-deps.sh` | 6 | no |
 | `check-sizing.py` | 141 widths swept | no |
 
-The six shell suites total **67 oracles** and run standalone, which matters: without a live herdr
+The eight shell suites total **96 oracles** and run standalone, which matters: without a live herdr
 server the live oracles cannot run at all, and a report must say so rather than call the gate green.
 
 Standards applied to each:

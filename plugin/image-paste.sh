@@ -114,7 +114,7 @@ import sys, json
 # Must match the [[panes]] titles in herdr-plugin.toml exactly. Oracle 23d derives its list from
 # that manifest and fails on any drift — it had to, because this set once named a 'Files' panel that
 # no longer exists while omitting 'Preview', making the Preview panel a legal target for a path.
-PANELS = {'Edit', 'Git', 'Problems', 'Search', 'TODO', 'Debug', 'Blame', 'Markdown', 'Preview', 'Tests'}
+PANELS = {'Edit', 'Git', 'Problems', 'Search', 'TODO', 'Debug', 'Blame', 'Markdown', 'Preview', 'Tests', 'Review'}
 try:
     panes = json.load(sys.stdin)['result']['panes']
 except Exception:

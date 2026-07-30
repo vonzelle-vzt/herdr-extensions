@@ -34,6 +34,31 @@ does them right, is idempotent, and is fully reversible.
 - **`herdr-fmt`**, the formatter resolver (see below).
 - **Dependencies**, only if absent: `spiceedit`, `lazygit`, a Nerd Font, `prettier`.
 
+### Oracle 26 — runtime diagnostics
+
+`tests/check-runtime-diagnostics.sh` (11 assertions). The Problems panel reports errors from the
+**running** app, not only from its source. Preview already drives headless Chrome; adding
+`--enable-logging=stderr --v=1` makes Chrome print `console.error` output *and* uncaught exceptions
+as `[...:CONSOLE:N] "MESSAGE", source: URL (LINE)`, which Preview parses into a `\x1f`-separated log
+that Problems reads. No CDP client, no websocket, no new dependency.
+
+🔴 **26b and 26c are the assertions that matter.** Chrome's line is comma-delimited and
+quote-wrapped, so a naive parse truncates every realistic error: `Cannot read properties of null,
+reading f` dies at the comma and `Unexpected token "}" in JSON` dies at the quote. Both were
+confirmed RED by mutating the parser to a comma split before being trusted green. A parser that only
+works on messages without punctuation works only on examples.
+
+A missing or stale log prints **nothing** — absence is not an error, and a panel that shouts about a
+preview nobody opened is noise.
+
+### Oracle 27 — the Review panel
+
+`tests/check-review.sh` (15 assertions). Same shape as oracle 23: a stubbed `herdr` on
+`HERDR_BIN_PATH` answers `pane list` and records every `send-text`, so the *target pane* is asserted
+rather than assumed. The panel must never type a note into one of our own panels, and its excluded
+label set is **derived from the manifest at runtime** — one assertion proves that by running against
+an empty manifest and checking the exclusion disappears.
+
 ### Out of scope for this package
 
 Anything that needs to happen *inside the editor* is out of scope here, because this package is an

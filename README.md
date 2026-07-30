@@ -16,7 +16,7 @@ herdr-extensions install
 ```
 
 That single command installs **everything** — the editor, `lazygit`, a Nerd Font, `prettier` — then
-registers eleven panels, injects the keybindings, and checks them against herdr's own so nothing of
+registers twelve panels, injects the keybindings, and checks them against herdr's own so nothing of
 yours breaks. There is no second step and no companion package to go and fetch.
 
 Inline diagnostics, a real editor panel, source control, search, problems, a debugger, a live
@@ -30,7 +30,7 @@ agents in a terminal, with a session that survives a dropped SSH connection. It 
 but no editor, no source-control UI, and no diagnostics.
 
 **herdr-extensions is the IDE half.** It turns a herdr session into something shaped like VS Code —
-file tree and editor on the left, agent on the right, eleven panels a keypress away — while staying a
+file tree and editor on the left, agent on the right, twelve panels a keypress away — while staying a
 terminal, so the whole thing still works over SSH and survives a disconnect.
 
 ### Who it is for
@@ -85,9 +85,9 @@ You install one thing. It brings the rest:
       ┌───────────────────────┼───────────────────────┐
       │                       │                       │
       ▼                       ▼                       ▼
- registers a           installs the            injects 14
+ registers a           installs the            injects 15
  herdr plugin          dependencies            keybindings
- (11 panels)           you don't have          (collision-checked
+ (12 panels)           you don't have          (collision-checked
       │                       │                 against herdr's 39)
       │                       ├─ herdr-edit ── the editor + LSP
       │                       ├─ lazygit ───── source control
@@ -111,7 +111,7 @@ Layers, and who owns what:
 | Layer | Owns | Provided by |
 | --- | --- | --- |
 | Session | workspaces, tabs, panes, survives SSH drop | **herdr** (third-party, unpatched) |
-| IDE | 11 panels, layout, keybindings, skin, installer | **this repo** (original work) |
+| IDE | 12 panels, layout, keybindings, skin, installer | **this repo** (original work) |
 | Editing | buffer, rendering, LSP, word wrap, file tree | **herdr-edit** (installed for you) |
 | Tools | git UI, search, typecheck, lint, tests, preview | lazygit, ripgrep, tsc, eslint, ruff, vitest, Chrome |
 
@@ -178,9 +178,10 @@ herdr feel like an IDE. Star counts and features checked 2026-07-30.
 | Git status in the tree | ✓ | ✓ | ✓ | — | ✓ |
 | Diff view | ✓ auto per file | ✓ + line comments | ✓ | — | ⏳ gutter marks + hunk preview only |
 | Stage / commit | ✗ | ✗ | ✓ + AI messages | — | ✓ via lazygit |
-| **Comment on a diff → send to the agent** | ✗ | ✓ | ✗ | — | ⏳ **planned** |
+| **Comment on a diff → send to the agent** | ✗ | ✓ | ✗ | — | ✓ Review panel |
 | PR view | ✗ | ✓ | ✗ | — | ✗ (other plugins do this well) |
 | **Typecheck / lint problems** | ✗ | ✗ | ✗ | ✗ | ✓ tsc · eslint · ruff |
+| **Runtime errors from the running app** | ✗ | ✗ | ✗ | console only | ✓ into the Problems panel |
 | **Run tests** | ✗ | ✗ | ✗ | ✗ | ✓ vitest · jest · pytest |
 | **Debug configs** | ✗ | ✗ | ✗ | ✗ | ✓ reads `launch.json` |
 | **Live preview of your app** | ✗ | ✗ | ✗ | ✓ full Chromium/CDP | ✓ screenshot, auto-refresh |
@@ -190,10 +191,9 @@ herdr feel like an IDE. Star counts and features checked 2026-07-30.
 | Checks your keybindings for clashes | ✗ | ✗ | ✗ | ✗ | ✓ against herdr's 39, at runtime |
 
 **What that table says.** The marketplace is full of excellent *viewers* — file-viewer and reviewr
-are genuinely better than us at reading a diff today, and reviewr's send-comments-to-the-agent loop
-is the one feature we most want and do not have. Roughly **eight** plugins now implement that loop
-independently, which makes it the most-replicated idea in the ecosystem and our most conspicuous
-absence.
+still read a diff better than we do, and that is worth saying plainly. Roughly **eight** plugins
+implement the comment-back-to-the-agent loop, which makes it the most-replicated idea in the
+ecosystem; the Review panel closes it here, and a real diff view is still owed.
 
 But every one of them is read-only, and none implements language intelligence. Nobody else here is
 an editor that can tell you an identifier does not exist without you running a build, and nobody
@@ -236,6 +236,7 @@ break, because there are no plugins.
 | `ctrl+b` `shift+v` | Markdown preview. |
 | `ctrl+b` `shift+u` | Tests — vitest / jest / pytest. |
 | `ctrl+b` `shift+a` | **Preview** — the dev server rendered inside a pane, refreshing itself. |
+| `ctrl+b` `shift+k` | **Review** — read the agent's diff, cite lines, send your notes back to it. |
 | `ctrl+b` `i` | **Paste an image** — clipboard screenshot, or the newest capture, typed as a path to the agent. |
 | `ctrl+b` `shift+l` / `shift+h` | Nudge the split divider right / left. |
 
@@ -266,14 +267,15 @@ that is absent.
 
 | Panel | What it runs |
 | --- | --- |
-| **Problems** | `tsc --noEmit`, `eslint --format json`, `ruff check` — whichever the repo has. Resolves them from `node_modules/.bin` first, so the repo's pinned version wins. |
+| **Problems** | `tsc --noEmit`, `eslint --format json`, `ruff check` — whichever the repo has. Resolves them from `node_modules/.bin` first, so the repo's pinned version wins. **Also reports runtime errors**: `console.error` output and uncaught exceptions thrown by the app the Preview panel is driving, mapped back to `file:line`. Static analysis tells you what is wrong with the source; this tells you what actually broke. |
 | **Search** | `ripgrep` across the repo root, grouped by file. 5–10× faster than a GUI search, and it respects `.gitignore` for free. |
 | **TODO** | `TODO` / `FIXME` / `HACK` / `XXX` with file and line. |
 | **Blame** | `git log --follow` and `git show --stat` for the file you are looking at. |
 | **Debug** | Parses the repo's `.vscode/launch.json` — comments and trailing commas included, because it is JSONC — lists the configurations, and hands off to an installed adapter (`koan-debugger`, `debugger-cli`, `dlv`, `lldb-dap`, `tdb`). |
 | **Markdown** | `glow -s dark` on the active file. |
 | **Tests** | Detects vitest / jest / pytest from `package.json` or `pyproject.toml`. |
-| **Git** | `lazygit`. Interactive staging alone is worth the panel. |
+| **Review** | The agent's diff against your branch's merge-base, with line numbers. Type `path:line your note`, collect as many as you like, and one key sends them all back to the **agent pane** as a single message. |
+| **Git** | `lazygit`. Interactive staging alone is worth the panel — plus an **AI commit message** command that drafts a subject line from the staged diff with your local `claude` CLI. |
 
 Every command they run is resolved to an **absolute path**, because the herdr server runs under
 launchd with `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and a bare binary name fails to spawn with no
@@ -604,12 +606,8 @@ supports neither OSC 52 clipboard nor any image protocol.
 These are the honest gaps, kept current against the marketplace rather than against our own
 roadmap. Where another plugin already does one of them well, it is named.
 
-**Review an agent's diff and send comments back.** The thing herdr is actually for, and the biggest
-hole here. [reviewr](https://github.com/persiyanov/herdr-reviewr) does it properly today — select
-lines, write notes, one key returns them to the agent. Planned; until then, run reviewr beside this.
-
-**A diff view inside the editor.** herdr-edit shows gutter change markers and a hunk preview, but
-not a real diff. [file-viewer](https://github.com/smarzban/herdr-file-viewer) picks the right view
+**A diff view inside the editor.** The Review panel shows the diff, but the *editor* still shows only
+gutter change markers and a hunk preview, not a real diff. [file-viewer](https://github.com/smarzban/herdr-file-viewer) picks the right view
 per file automatically and can flip the baseline between merge-base and `HEAD`. Planned.
 
 **Inline git blame** — author and commit shown on the cursor's line, GitLens-style. The Blame panel
@@ -623,13 +621,6 @@ written yet. Tracked in [UPSTREAM.md](UPSTREAM.md) as owed upstream too.
 **Autocomplete.** The LSP client does diagnostics, hover and go-to-definition; `textDocument/
 completion` and a completion popup are not written. This is the largest remaining "tiny VS Code"
 absence, and the transport it needs already exists.
-
-**Runtime diagnostics.** The Problems panel is *static* analysis only — `tsc`, `eslint`, `ruff`.
-Errors thrown by the app while it actually runs never reach it, even though the Preview panel is
-already pointed at that running app. [herdr-flutter](https://github.com/ablause/herdr-flutter)
-surfaces live `Flutter.Error` events with `file:line`, and
-[StructuPath/herdr-browser](https://github.com/StructuPath/herdr-browser) surfaces console and page
-errors. The natural version here is Preview feeding Problems; it is not written.
 
 **Cross-file replace with preview.** The editor now has replace, regex and a match-preview API;
 driving it across a whole repo from the Search panel is not wired up.

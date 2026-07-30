@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+# Review panel — show the worktree diff, collect file:line notes, send them to the agent.
+#
+# Launched as a [[panes]] command by open-panel.sh (action open-review). Unlike the other panels
+# here it does not print once and wait for a keypress: it stays interactive for the whole session
+# so notes can be typed one at a time, because the send-back loop IS the feature.
+#
+#   path:line comment text     accumulate a note (echoed back so you know it landed)
+#   s                          send every accumulated note to the AGENT pane as one message, clear
+#   b                          flip the baseline (branch merge-base <-> HEAD) and reprint the diff
+#   q                          quit this panel
+#
+# THE HARD PART is picking the pane a note lands in. Never type into one of our own panels — that
+# silently does nothing, which reads as "the panel is broken". Absolute paths for every external
+# binary (launchd's PATH is /usr/bin:/bin:/usr/sbin:/sbin, no Homebrew), and the excluded-panel-label
+# set below is DERIVED from the manifest at runtime rather than restated: oracle 23d went blind
+# once already, naming a "Files" panel that no longer existed while omitting "Preview", which made
+# the Preview panel a legal target for an injected value. image-paste.sh has its own copy of this
+# same pick for the same reason; sharing a helper would put a third file in two units' scope, so the
+# duplication here is accepted debt, not an oversight.
+set -uo pipefail
+
+GIT=/usr/bin/git
+PY=/usr/bin/python3
+herdr_bin="${HERDR_BIN_PATH:-@@HERDR@@}"
+ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+note() { printf 'review: %s\n' "$*" >&2; }
+
+# ---------------------------------------------------------------------------------------------
+# Resolve the repo. Prefer the root SpiceEdit last published for the active file — the pane this
+# script is launched in has NO reliable project cwd of its own (it is exec'd from the plugin
+# directory), same reason blame/debug/todo read this file instead of trusting $PWD. Fall back to
+# widening whatever directory we do have out to its git toplevel.
+#
+# NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so bash
+# collapses runs of it and strips leading/trailing fields — with no file open the payload starts
+# with an empty field and every value silently shifts left, putting the line number into the
+# filename variable. \x1f is non-whitespace, so empty fields are preserved.
+IFS=$'\x1f' read -r active_file active_line active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print("\x1f".join([d.get("file") or "", str(d.get("line") or 1), d.get("root") or ""]))
+EOF
+)"
+
+repo="$active_root"
+if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+  base="${active_file:-$PWD}"
+  dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
+  repo="$("$GIT" -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$repo" ] || repo="$dir"
+fi
+
+if ! "$GIT" -C "$repo" rev-parse --show-toplevel >/dev/null 2>&1; then
+  echo "Review — $repo is not inside a git repository."
+  echo "Open a file in the editor first, then reopen this panel."
+  echo
+  echo "Press any key to close..."
+  IFS= read -r -n1 -s _ || true
+  exit 0
+fi
+repo="$("$GIT" -C "$repo" rev-parse --show-toplevel)"
+
+# ---------------------------------------------------------------------------------------------
+# Baseline. Default is the merge-base with whatever default branch exists locally, so the diff
+# shown is "everything this branch adds" — a PR-shaped diff. `b` flips to plain HEAD, i.e. only
+# the uncommitted worktree changes, for when you want to review just what you have not committed
+# yet rather than the whole branch.
+baseline_mode="head"
+case "${1:-}" in
+  head) baseline_mode="head" ;;
+  *) baseline_mode="merge-base" ;;
+esac
+
+merge_base_ref() {
+  local b ref
+  for b in origin/main origin/master main master; do
+    if "$GIT" -C "$repo" rev-parse --verify -q "$b" >/dev/null 2>&1; then
+      ref="$("$GIT" -C "$repo" merge-base HEAD "$b" 2>/dev/null)"
+      if [ -n "$ref" ]; then
+        printf '%s' "$ref"
+        return 0
+      fi
+    fi
+  done
+  # No default branch reachable locally (a shallow clone, a detached checkout) — HEAD itself
+  # gives an empty-but-valid diff rather than a crash.
+  "$GIT" -C "$repo" rev-parse HEAD 2>/dev/null
+}
+
+diff_baseline() {
+  if [ "$baseline_mode" = "head" ]; then
+    printf 'HEAD'
+  else
+    merge_base_ref
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Print the diff grouped by file, with a citable line number on every row: the NEW-file line for
+# context/added lines, the OLD-file line (marked "-") for removed ones, since a removed line has
+# no home in the new file to cite.
+print_diff() {
+  local base diff_tmp
+  base="$(diff_baseline)"
+  echo "Review — $repo"
+  if [ "$baseline_mode" = "head" ]; then
+    echo "baseline: HEAD (uncommitted worktree changes only — type b to flip to the branch diff)"
+  else
+    echo "baseline: $base (branch merge-base — type b to flip to HEAD-only)"
+  fi
+  echo
+  # `git diff | python3 - <<EOF` would be broken: the heredoc redirection replaces the pipe on
+  # python3's stdin entirely, so the diff text would never arrive and the parser would silently
+  # see an empty input. Write the diff to a file and pass it as argv instead, the same pattern
+  # already used above for active.json.
+  diff_tmp="${TMPDIR:-/tmp}/herdr-review-diff.$$"
+  "$GIT" -C "$repo" diff --no-color "$base" -- >"$diff_tmp" 2>/dev/null
+  "$PY" - "$diff_tmp" <<'EOF'
+import re
+import sys
+
+cur = None
+oldline = newline = 0
+hunk_re = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+printed_any = False
+with open(sys.argv[1]) as f:
+    lines = f.readlines()
+for raw in lines:
+    line = raw.rstrip("\n")
+    if line.startswith("+++ "):
+        p = line[4:]
+        if p.startswith("b/"):
+            p = p[2:]
+        if p == "/dev/null":
+            cur = None
+            continue
+        cur = p
+        print("\n== %s ==" % cur)
+        continue
+    if line.startswith(("--- ", "diff ", "index ")):
+        continue
+    m = hunk_re.match(line)
+    if m:
+        oldline, newline = int(m.group(1)), int(m.group(2))
+        continue
+    if cur is None:
+        continue
+    if line.startswith("+"):
+        print("  %6d +  %s" % (newline, line[1:]))
+        newline += 1
+        printed_any = True
+    elif line.startswith("-"):
+        print("  %6d -  %s" % (oldline, line[1:]))
+        oldline += 1
+        printed_any = True
+    else:
+        print("  %6d    %s" % (newline, line[1:] if line else ""))
+        newline += 1
+        oldline += 1
+if not printed_any:
+    print("(no changes against this baseline)")
+EOF
+  rm -f "$diff_tmp"
+  echo
+}
+
+# ---------------------------------------------------------------------------------------------
+# Locate the rendered manifest so the excluded-panel-label set can be derived, not restated. It
+# is copied to sit right beside this script by render_plugin() (see bin/herdr-extensions,
+# PANEL_SCRIPTS) — but this same script is also run straight out of the repo (libexec/review) for
+# testing and by hand, where the manifest instead lives one level up in plugin/. Try both rather
+# than hardcoding either.
+find_manifest() {
+  local d
+  d="$(cd "$(dirname "$0")" && pwd)"
+  for cand in "$d/herdr-plugin.toml" "$d/../herdr-plugin.toml" "$d/../plugin/herdr-plugin.toml"; do
+    if [ -f "$cand" ]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Pick the pane a note should be typed into. Order of preference, most specific first:
+#   1. the focused pane, if it is not one of our own panels
+#   2. an unused-but-usable pane in the SAME TAB as the focused one
+#   3. an unused-but-usable pane in the SAME WORKSPACE as the focused one
+#   4. any usable pane that is itself an agent
+# Dropping a note into an agent in an unrelated project is worse than doing nothing, so there is
+# deliberately no "any pane anywhere" step past this.
+pick_agent_pane() {
+  local manifest panes_json
+  manifest="$(find_manifest)" || {
+    note "cannot find herdr-plugin.toml to derive the panel exclusion list"
+    return 1
+  }
+  panes_json="$("$herdr_bin" pane list 2>/dev/null)"
+  "$PY" -c "
+import json
+import re
+import sys
+
+panes_raw, manifest_path = sys.argv[1], sys.argv[2]
+
+# DERIVED from the manifest every time this runs, never restated as a literal set here — a
+# hardcoded copy is exactly how oracle 23d went blind: it named a panel that no longer existed
+# and left out one that did, so a note could land in our own Preview pane unnoticed.
+manifest = open(manifest_path).read()
+panels = set()
+in_pane = False
+for line in manifest.splitlines():
+    stripped = line.strip()
+    if stripped == '[[panes]]':
+        in_pane = True
+        continue
+    if stripped.startswith('[['):
+        in_pane = False
+        continue
+    if in_pane:
+        m = re.match(r'title\s*=\s*\"(.*)\"\s*\$', stripped)
+        if m:
+            panels.add(m.group(1))
+
+try:
+    panes = json.loads(panes_raw)['result']['panes']
+except Exception:
+    panes = []
+
+
+def usable(p):
+    return (p.get('label') or '') not in panels
+
+
+focused = next((p for p in panes if p.get('focused')), None)
+pick = None
+if focused and usable(focused):
+    pick = focused
+elif focused:
+    for scope in ('tab_id', 'workspace_id'):
+        pick = next((p for p in panes if usable(p) and p.get(scope) == focused.get(scope)), None)
+        if pick:
+            break
+if pick is None:
+    pick = next((p for p in panes if usable(p) and p.get('agent')), None)
+print(pick['pane_id'] if pick else '')
+" "$panes_json" "$manifest" 2>/dev/null
+}
+
+NOTES_FILE="${TMPDIR:-/tmp}/herdr-review-notes.$$"
+: > "$NOTES_FILE"
+trap 'rm -f "$NOTES_FILE"' EXIT
+
+send_notes() {
+  if [ ! -s "$NOTES_FILE" ]; then
+    note "nothing to send yet"
+    return 0
+  fi
+  local pane msg count
+  pane="$(pick_agent_pane)"
+  if [ -z "$pane" ]; then
+    note "no usable agent pane found; notes stay in $NOTES_FILE"
+    return 1
+  fi
+  # The file is already newline-terminated per note, so this trailing newline is what submits
+  # the message rather than leaving it sitting typed on the prompt line — the difference between
+  # "sent" and merely "delivered".
+  msg="$(cat "$NOTES_FILE")"
+  count="$(wc -l <"$NOTES_FILE" | tr -d ' ')"
+  if "$herdr_bin" pane send-text "$pane" "$msg
+" >/dev/null 2>&1; then
+    note "-> $pane  ($count note(s) sent)"
+    : > "$NOTES_FILE"
+  else
+    note "send-text failed; notes stay in $NOTES_FILE"
+    return 1
+  fi
+}
+
+print_diff
+
+echo "Type a note as  path:line comment text"
+echo "  s  send all accumulated notes to the agent pane, then clear them"
+echo "  b  flip the baseline (branch merge-base <-> HEAD) and reprint the diff"
+echo "  q  quit this panel"
+echo
+
+while IFS= read -r line; do
+  case "$line" in
+    q)
+      break
+      ;;
+    s)
+      send_notes
+      ;;
+    b)
+      if [ "$baseline_mode" = "head" ]; then
+        baseline_mode="merge-base"
+      else
+        baseline_mode="head"
+      fi
+      echo
+      print_diff
+      ;;
+    "") ;;
+    *)
+      printf '%s\n' "$line" >>"$NOTES_FILE"
+      echo "noted: $line"
+      ;;
+  esac
+done
+
+exit 0
