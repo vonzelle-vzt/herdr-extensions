@@ -139,6 +139,46 @@ if [ -z "$proj" ]; then
   fi
 fi
 
+# ============================ IS A SPLIT EVEN VIABLE? ============================
+# A side-by-side needs enough room for BOTH panes, and on a narrow terminal it simply does not
+# exist. Observed on a 105-column window: herdr's sidebar takes 36, leaving 69 to split; the editor
+# claims its 56-column minimum and the agent is left with 13 — technically a split, practically
+# useless, and the agent is the pane you were reading.
+#
+# Neither clamp can rescue that, because the two requirements genuinely conflict. So detect it
+# BEFORE opening and use a tab instead, which is what VS Code does when you shrink a window. Only
+# applies to a horizontal split with a column-based size; a vertical panel and a fractional size
+# are both left alone.
+MIN_PEER=44          # below this the pane you split AWAY from stops being readable
+if [ "$mode" = "split" ] && [ "$direction" = "right" ] && [ -n "$ratio" ]; then
+  avail="$("$PY" - "$("$herdr_bin" pane edges --pane "${target:-}" 2>/dev/null)" <<'EOF' 2>/dev/null || true
+import json, sys
+try:
+    lay = json.loads(sys.argv[1])["result"]["edges"]["layout"]
+    print(lay["area"]["width"])
+except Exception:
+    pass
+EOF
+)"
+  # No width shortcut here. An earlier version skipped the check above 100 columns, which left a
+  # hole at exactly 100: the editor took 88 and the peer got 12, the very outcome this guards.
+  if [ -n "$avail" ]; then
+    case "$ratio" in
+      *.*) : ;;                      # a fraction, not columns — the arithmetic below would be wrong
+      [0-9]*)
+        need=$((ratio < 56 ? 56 : ratio))
+        # Only the editor has a tab variant to fall back to. Everything else is a bottom panel
+        # (direction=down) and never reaches this branch, but be explicit rather than building an
+        # entrypoint id by string concatenation that could name a pane the manifest does not have.
+        if [ "$((avail - need))" -lt "$MIN_PEER" ] && [ "$entrypoint" = "editor" ]; then
+          mode="tab"
+          entrypoint="editor-tab"
+        fi
+        ;;
+    esac
+  fi
+fi
+
 if [ "$mode" = "tab" ]; then
   exec "$herdr_bin" plugin pane open \
     --plugin herdr-extensions --entrypoint "$entrypoint" \

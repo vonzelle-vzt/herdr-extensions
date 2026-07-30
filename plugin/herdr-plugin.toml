@@ -112,8 +112,12 @@ command = ["bash", "tests"]
 # opens at a hard 50/50. A number >= 1 is a COLUMN COUNT, converted against the live split and
 # clamped so the panel can never land under SpiceEdit's 50-column draw minimum (which is what
 # produces "Window too small - please resize") nor eat more than ~55% of the screen. A value
-# below 1 is taken as a literal fraction, which is what the vertical git panel wants. Empty
-# means leave herdr's own sizing alone, which is correct for a full-width tab.
+# below 1 is taken as a literal fraction, which is what the vertical git panel wants. OMITTING the
+# argument leaves herdr's own sizing alone, which is correct for a full-width tab.
+#
+# 🔴 Do NOT pass "" for it. herdr rejects any empty argv entry with "command must contain non-empty
+# argv strings" and marks the WHOLE manifest unavailable — every action in this file stops working,
+# not just the one with the empty string.
 #
 # `swap = yes` swaps the new pane with the agent pane right after opening — that is how the editor
 # ends up on the LEFT, because `plugin pane open --direction` accepts only right|down and there is
@@ -132,7 +136,7 @@ id = "open-editor-tab"
 platforms = ["linux", "macos"]
 title = "Editor (own tab)"
 description = "Open SpiceEdit full-width in its own tab, or switch to it if already open."
-command = ["bash", "open-panel.sh", "editor-tab", "Edit", "tab", "right", "key", "no", ""]
+command = ["bash", "open-panel.sh", "editor-tab", "Edit", "tab", "right", "key", "no"]
 
 [[actions]]
 id = "open-git"
