@@ -68,6 +68,25 @@ ps=json.load(sys.stdin)['result']['panes']
 print(sum(1 for p in ps if p['workspace_id']==ws and (p.get('label') or '')==label))" "$1" "$2"
 }
 
+# Focus a pane by id and WAIT until herdr agrees, rather than sleeping and hoping.
+#
+# herdr has no focus-by-id, so this is the same zoom --on/--off cycle the launcher uses. The waiting
+# is the point: `plugin action invoke` resolves the globally focused pane, so an unconfirmed focus
+# makes the next oracle assert against whichever pane herdr still thinks is current. That is how the
+# toggle-off half of ORACLE 6 started failing the moment another workspace-creating oracle was added
+# ahead of it — a sleep 1 that was always a race, and only lost the race once the churn increased.
+focus_pane() {
+  pid="$1"; i=0
+  "$HERDR" pane zoom "$pid" --on  >/dev/null 2>&1
+  "$HERDR" pane zoom "$pid" --off >/dev/null 2>&1
+  while [ "$i" -lt 20 ]; do
+    [ "$(pane_field "$pid" focused)" = "True" ] && return 0
+    sleep 0.5
+    i=$((i + 1))
+  done
+  return 1
+}
+
 echo
 echo "ORACLE 4+5: auto-open scopes to the repo root, and stays silent outside a repo"
 
@@ -170,6 +189,64 @@ if [ -n "$WS_HOME" ]; then
   fi
 fi
 
+# --- ORACLE 21: in $HOME, but LABELLED after a project: expect that project -------------------
+# The positive counterpart to ORACLE 5, and the case a user actually hits. `herdr workspace create`
+# and herdr-plus Projects both leave the root pane at $HOME unless given --cwd, so a workspace called
+# "affiliate crm" used to get no editor at all -- ORACLE 5 passing was the whole bug, because it only
+# ever proved the silent path with a label matching nothing.
+#
+# The fixture repo has to live under the REAL PROJECTS_ROOT, read from the INSTALLED launcher: the
+# server execs that copy, not the one in this repo, and the repo copy still has the @@template@@.
+PROJ_ROOT="$("$PY" - "$HOME/.config/herdr/plugins/local/herdr-extensions/open-panel.sh" <<'PYEOF' 2>/dev/null || true
+import re, sys
+try:
+    src = open(sys.argv[1]).read()
+except OSError:
+    sys.exit(0)
+m = re.search(r'^PROJECTS_ROOT="(.*)"$', src, re.M)
+if m and not m.group(1).startswith("@@"):
+    print(m.group(1))
+PYEOF
+)"
+LABEL_REPO=""
+if [ -n "${PROJ_ROOT:-}" ] && [ -d "$PROJ_ROOT" ]; then
+  LABEL_REPO="$PROJ_ROOT/htcheck-labelmatch"
+  mkdir -p "$LABEL_REPO"
+  ( cd "$LABEL_REPO" && /usr/bin/git init -q . \
+    && /usr/bin/git config user.email t@t.co && /usr/bin/git config user.name t \
+    && mkdir -p src && echo hi > src/file.txt \
+    && /usr/bin/git add -A && /usr/bin/git commit -qm init ) >/dev/null 2>&1
+
+  out="$("$HERDR" workspace create --cwd "$HOME" --label "htcheck labelmatch" 2>/dev/null)"
+  WS_LABEL="$(printf '%s' "$out" | "$PY" -c "
+import json,sys
+try: print(json.load(sys.stdin)['result']['workspace']['workspace_id'])
+except Exception: print('')")"
+  sleep 6
+  if [ -n "$WS_LABEL" ]; then
+    LED="$(find_pane "$WS_LABEL" Edit)"
+    if [ -z "$LED" ]; then
+      no "ORACLE 21: no editor for a \$HOME workspace labelled after a real project"
+    else
+      lcwd="$("$PY" -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$(pane_field "$LED" cwd)")"
+      lwant="$("$PY" -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$LABEL_REPO")"
+      if [ "$lcwd" = "$lwant" ]; then
+        ok "ORACLE 21: label resolved the project ($lcwd)"
+      else
+        no "ORACLE 21: expected $lwant, got $lcwd"
+      fi
+      # And it must actually DISPLAY the folders, not just be rooted correctly.
+      if "$HERDR" pane read "$LED" --source visible --format text 2>/dev/null | grep -q "EXPLORER"; then
+        ok "ORACLE 21: and it displays the project folders"
+      else
+        no "ORACLE 21: rooted correctly but showing no file tree"
+      fi
+    fi
+  fi
+else
+  note "ORACLE 21: skipped — no rendered PROJECTS_ROOT in the installed launcher"
+fi
+
 # --- ORACLE 6: toggle cycle on the git panel --------------------------------------------------
 echo
 echo "ORACLE 6: git panel toggles open -> closed"
@@ -188,14 +265,12 @@ print(next((p['pane_id'] for p in ps if p['workspace_id']==ws and not (p.get('la
   # nothing — and this oracle reported "git panel did not open" as though the panel were broken.
   # A harness that steals focus has to be explicit about where it puts it back.
   "$HERDR" workspace focus "$WS_REPO" >/dev/null 2>&1
-  "$HERDR" pane zoom "$AG" --on >/dev/null 2>&1; "$HERDR" pane zoom "$AG" --off >/dev/null 2>&1
-  sleep 1
+  focus_pane "$AG" || no "ORACLE 6: could not focus the agent pane"
   "$HERDR" plugin action invoke open-git --plugin herdr-extensions >/dev/null 2>&1; sleep 6
   GP="$(find_pane "$WS_REPO" Git)"
   if [ -n "$GP" ]; then
     ok "git panel opened (rooted at $(pane_field "$GP" cwd))"
-    "$HERDR" pane zoom "$GP" --on >/dev/null 2>&1; "$HERDR" pane zoom "$GP" --off >/dev/null 2>&1
-    sleep 1
+    focus_pane "$GP" || no "ORACLE 6: could not focus the git pane"
     "$HERDR" plugin action invoke open-git --plugin herdr-extensions >/dev/null 2>&1; sleep 4
     if [ "$(count_label "$WS_REPO" Git)" = "0" ]; then
       ok "ORACLE 6: second invoke closed it"
@@ -269,9 +344,14 @@ for suite in check-panels check-viability check-project-resolve; do
 done
 
 # --- cleanup ----------------------------------------------------------------------------------
-for w in "${WS_REPO:-}" "${WS_HOME:-}"; do
+for w in "${WS_REPO:-}" "${WS_HOME:-}" "${WS_LABEL:-}"; do
   [ -n "$w" ] && "$HERDR" workspace close "$w" >/dev/null 2>&1
 done
+# The ORACLE 21 fixture is the only thing this script writes outside $TMP, so be exact about
+# removing it: guard on the expected basename rather than trusting the variable.
+case "${LABEL_REPO:-}" in
+  */htcheck-labelmatch) rm -rf "$LABEL_REPO" ;;
+esac
 # Put the user back where they were. Closing a focused workspace leaves focus wherever herdr
 # happens to land, which is not necessarily where the run started.
 [ -n "${WS_ORIG:-}" ] && "$HERDR" workspace focus "$WS_ORIG" >/dev/null 2>&1
