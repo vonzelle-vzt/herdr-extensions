@@ -53,6 +53,10 @@ repo_root="$repo"
 # PATH=/usr/bin:/bin:/usr/sbin:/sbin -- a bare `herdr-edit` never resolves and the
 # action would silently do nothing. Quoted because the rendered path may contain spaces.
 EDITOR_BIN="@@SPICEEDIT@@"
+# delta renders a diff far better than we can: syntax highlighting, real word-level intra-line
+# marks, and file headers. It is OPTIONAL -- absent, the built-in renderer below still produces
+# everything the panel actually depends on. Quoted and absolute for the usual launchd-PATH reason.
+DELTA_BIN="@@DELTA@@"
 if [ -z "$repo" ] || [ ! -d "$repo" ]; then
   base="${active_file:-$PWD}"
   dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
@@ -125,6 +129,24 @@ print_diff() {
   # already used above for active.json.
   diff_tmp="${TMPDIR:-/tmp}/herdr-review-diff.$$"
   "$GIT" -C "$repo" diff --no-color "$base" -- >"$diff_tmp" 2>/dev/null
+
+  # Prefer delta when it is installed. --line-numbers is not decoration here: the whole panel is
+  # built around citing a line (`path:line note`, and `e path:line` to open it), so a renderer that
+  # drops line numbers would be prettier and useless. --paging=never matters too, or delta forks a
+  # pager inside a herdr pane and the panel appears to hang.
+  if [ -x "$DELTA_BIN" ] && [ -z "${HERDR_REVIEW_NO_DELTA:-}" ]; then
+    if [ -s "$diff_tmp" ]; then
+      "$DELTA_BIN" --line-numbers --paging=never --no-gitconfig <"$diff_tmp" 2>/dev/null && {
+        rm -f "$diff_tmp"
+        return 0
+      }
+    else
+      echo "(no changes against this baseline)"
+      rm -f "$diff_tmp"
+      return 0
+    fi
+  fi
+
   "$PY" - "$diff_tmp" <<'EOF'
 import re
 import sys

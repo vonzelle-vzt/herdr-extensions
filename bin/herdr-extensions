@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.13.1"
+VERSION = "0.14.0"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -479,7 +479,8 @@ def render_plugin(dry, projects_root):
     files += [(n, open(p).read()
                .replace("@@CHAFA@@", chafa)
                .replace("@@CHROME@@", chrome)
-               .replace("@@SPICEEDIT@@", spice), 0o755)
+               .replace("@@SPICEEDIT@@", spice)
+               .replace("@@DELTA@@", which("delta") or "/nonexistent/delta"), 0o755)
               for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
     for name, body, mode in files:
         dst = os.path.join(PLUGIN_DST, name)

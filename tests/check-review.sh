@@ -312,5 +312,67 @@ fi
 if grep -q "pane send-text" "$LOG" 2>/dev/null || true; then :; fi
 ( cd "$REPO" && "$GIT" checkout -q main 2>/dev/null ) || true
 
+# =================================================================================================
+# (f) delta is PREFERRED for rendering when installed, and OPTIONAL when it is not
+# =================================================================================================
+# Reading a diff well is the thing the strongest plugins in this marketplace do better than a raw
+# `git diff` dump. delta gives syntax highlighting and word-level intra-line marks. --line-numbers
+# is mandatory rather than cosmetic: the whole panel is built on citing a line.
+# 🔴 Section (e) exercised the push guards, and doing so ran `git checkout` to clean the worktree
+# and switch back to main. That left the fixture with NOTHING to diff, so a renderer test running
+# afterwards would assert against an empty diff and fail for a reason that has nothing to do with
+# the renderer. Re-dirty the fixture rather than depending on the order sections happen to run in.
+( cd "$REPO" && printf 'one\nTWO CHANGED AGAIN\nthree\nfour\n' >file.txt )
+
+DELTA_STUB="$TMP/deltabin"
+mkdir -p "$DELTA_STUB"
+cat >"$DELTA_STUB/delta" <<'DELTAEOF'
+#!/usr/bin/env bash
+echo "DELTA-RENDERED"
+echo "args: $*"
+cat >/dev/null
+exit 0
+DELTAEOF
+chmod +x "$DELTA_STUB/delta"
+
+DELTA_SCRIPT="$TMP/review-delta.sh"
+/usr/bin/python3 - "$ROOT/libexec/review" "$DELTA_SCRIPT" "$TMP/herdr" "$DELTA_STUB/delta" <<'PYEOF2'
+import sys
+src, dst, herdr, delta = sys.argv[1:5]
+open(dst, "w").write(open(src).read().replace("@@HERDR@@", herdr).replace("@@DELTA@@", delta))
+PYEOF2
+chmod +x "$DELTA_SCRIPT"
+
+run_delta() {  # run_delta <extra-env-assignment> <outfile>
+  : > "$LOG"
+  printf 'q\n' | (cd "$REPO" && HOME="$TMP/home" XDG_STATE_HOME="$STATE_HOME" PATH="$STUB_BIN:$PATH" \
+    HERDR_BIN_PATH=herdr HERDR_STUB_LOG="$LOG" HERDR_STUB_PANES="$(panes agent Preview)" \
+    env $1 /bin/bash "$DELTA_SCRIPT" >"$2" 2>&1)
+}
+
+run_delta "IGNORED=1" "$TMP/dout"
+if grep -q "DELTA-RENDERED" "$TMP/dout"; then
+  ok "f) delta renders the diff when it is installed"
+else
+  no "f) delta was installed but not used"
+fi
+if grep -q -- "--line-numbers" "$TMP/dout"; then
+  ok "f) and asks for line numbers, which the path:line workflow depends on"
+else
+  no "f) delta ran WITHOUT --line-numbers, so lines could not be cited"
+fi
+if grep -q -- "--paging=never" "$TMP/dout"; then
+  ok "f) and disables paging, or the panel would appear to hang behind a pager"
+else
+  no "f) delta ran without --paging=never"
+fi
+
+run_delta "HERDR_REVIEW_NO_DELTA=1" "$TMP/dout2"
+if grep -qE "^ *[0-9]+ *\+" "$TMP/dout2"; then
+  ok "f) without delta the built-in renderer still prints citable line numbers"
+else
+  no "f) the fallback renderer lost its line numbers"
+fi
+
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
