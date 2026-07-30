@@ -109,8 +109,24 @@ else
 fi
 
 # --- 23d: every panel label is excluded, not just the editor ------------------------------------
+# The label list is DERIVED from the manifest, never restated here. A hardcoded copy is exactly how
+# this oracle went blind: it listed a "Files" panel that no longer exists and never mentioned
+# "Preview", so the Preview panel was a legal injection target and the gate could not see it.
+manifest_pane_titles() {
+  awk '
+    /^\[\[panes\]\]/ { inp = 1; next }
+    /^\[\[/          { inp = 0 }
+    inp && /^title[[:space:]]*=/ {
+      line = $0
+      sub(/^title[[:space:]]*=[[:space:]]*"/, "", line)
+      sub(/"[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "$ROOT/plugin/herdr-plugin.toml" | sort -u
+}
+
 bad_labels=""
-for label in Git Problems Search TODO Debug Blame Markdown Tests Files; do
+for label in $(manifest_pane_titles); do
   p="$(printf '{"result":{"panes":[{"pane_id":"wT:p1","tab_id":"wT:t1","workspace_id":"wT","agent":"claude","focused":false},{"pane_id":"wT:p2","tab_id":"wT:t1","workspace_id":"wT","label":"%s","focused":true}]},"type":"pane_list"}' "$label")"
   [ "$(run "$p" "$IMG")" = "wT:p1" ] || bad_labels="$bad_labels $label"
 done

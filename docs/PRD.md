@@ -1,6 +1,6 @@
 # herdr-extensions — PRD
 
-**Status:** shipped, v0.8.0 · **Owner:** vonzelle-vzt · **Last reviewed:** 2026-07-30
+**Status:** shipped, v0.9.1 · **Owner:** vonzelle-vzt · **Last reviewed:** 2026-07-30
 
 [SPEC.md](../SPEC.md) is the engineering authority — every design decision and the bug it prevents.
 This document is the *product* view: who it is for, what problem it solves, what is deliberately out
@@ -70,17 +70,42 @@ navigable are missing precisely where an agent is doing the navigating.**
 | VS Code skin | `herdr-extensions skin` | herdr's own chrome, two variants + reset |
 | Format-on-save resolver | `herdr-fmt` | vendored prettier wins over global, monorepo-safe |
 
-### Deliberately out of scope
+### Not yet — the real gaps
+
+Kept honest against the marketplace, not against our own roadmap. Where a competitor already does
+one of these well, it is named, because "use the better tool" is a legitimate answer for a package
+whose whole premise is composing with a pane multiplexer.
+
+| Gap | Who does it today | Standing |
+| --- | --- | --- |
+| **Review an agent's diff, comment on lines, send the notes back** | [reviewr](https://github.com/persiyanov/herdr-reviewr) (283★) | The single biggest hole. It is the loop herdr exists for, and we have none of it. Planned. |
+| **A diff view in the editor** | [file-viewer](https://github.com/smarzban/herdr-file-viewer) (290★) — auto view per file, merge-base ⇄ `HEAD` baseline flip | We have gutter markers and a hunk preview, not a diff. Planned; feeds the review panel. |
+| **Inline git blame** on the cursor line | GitLens, in a GUI | Editor-side, owed upstream too. Planned. |
+| **A command palette** | [herdr-command-palette](https://github.com/JanTvrdik/herdr-command-palette) | We have a fuzzy *file* finder but no fuzzy *command* search. Planned; the finder and the action tables both already exist. |
+| **LSP autocomplete** | nobody in this marketplace | The largest remaining "tiny VS Code" absence. Transport, UTF-16 conversion and the server registry are all in place. |
+| **AI commit messages** | [sidebar](https://github.com/alexarthurs/herdr-sidebar) | A lazygit custom command away. |
+| **Cross-file replace with preview** | — | The editor now has replace and a match-preview API; driving it repo-wide from the Search panel is not wired. |
+
+### Deliberately out of scope, permanently
 
 - **A plugin system** — see principle 1.
 - **A debug adapter client.** The Debug panel finds an installed adapter and hands off. Writing a real
   DAP client is a quarter of work for a worse result than `koan-debugger`.
-- **Inline git blame** (GitLens-style, on the cursor line). Editor-side; belongs to `herdr-edit`.
-- **Cross-file replace with preview.** The editor has the primitives; driving it repo-wide from the
-  Search panel is not wired.
 - **Mouse divider drag.** Not ours to build: herdr 0.7.5 has no divider-drag action at all. Worked
   around with one-keypress nudges (`ctrl+b shift+l/h`).
 - **Windows.** macOS and Linux only.
+- **Notifications, mobile/remote access, agent orchestration, session restore, token dashboards, tab
+  naming, fuzzy navigation.** Crowded, healthy categories — 22, 17, 49, 17, 6, 16 and 46 plugins
+  respectively as of 2026-07-30. This package is the IDE layer; duplicating them would dilute it and
+  beat none of them.
+
+### Where we actually win
+
+Of 417 plugins carrying the `herdr-plugin` topic, **none ships language intelligence**. Every direct
+neighbour — file-viewer, reviewr, sidebar — is a read-only *viewer*. The defensible position is the
+one thing that cannot be done with a shell wrapper, because it needs a live process that has parsed
+the project: **a real editor with a real LSP client**, plus the build-loop panels (problems, tests,
+debug, live preview) that no other plugin offers at all.
 
 ## 5. Constraints that shape the design
 
@@ -105,21 +130,27 @@ These are not preferences; they are properties of the environment that have each
 3. **Byte-for-byte uninstall.** Verified by oracle 2.
 4. **No keybinding collisions**, against a set derived at runtime. Verified by oracles 11 and 12.
 5. **Every failure names itself.** `doctor` exits non-zero and identifies the specific broken part.
-6. **The gate is real.** `live-check.sh` runs 19 checks and delegates to all four offline suites — it
-   is not allowed to be green without having executed them.
+6. **The gate is real.** `live-check.sh` delegates to every offline suite rather than reimplementing
+   them — it is not allowed to be green without having executed them. It once ran none of them.
 
 ## 7. How we know it works
 
-24 numbered oracles in [SPEC.md](../SPEC.md), split across five suites:
+25 numbered oracles in [SPEC.md](../SPEC.md). `live-check.sh` is the gate; it adds its own live
+oracles and runs all six offline suites plus the sizing sweep:
 
-| Suite | Count | Needs a server? |
+| Suite | Oracles | Needs a server? |
 | --- | --- | --- |
-| `live-check.sh` | 19 total (delegates below) | yes |
+| `live-check.sh` | its own live checks, then delegates to every row below | yes |
 | `check-panels.sh` | 28 | no |
 | `check-viability.sh` | 7 | no |
 | `check-project-resolve.sh` | 7 | no |
-| `check-image-paste.sh` | 10 | no |
+| `check-image-paste.sh` | 11 | no |
 | `check-preview.sh` | 8 | no |
+| `check-deps.sh` | 6 | no |
+| `check-sizing.py` | 141 widths swept | no |
+
+The six shell suites total **67 oracles** and run standalone, which matters: without a live herdr
+server the live oracles cannot run at all, and a report must say so rather than call the gate green.
 
 Standards applied to each:
 
@@ -129,6 +160,11 @@ Standards applied to each:
   failing it — and a hanging gate is no better than one never run.
 - **Assert on rendered output, not arithmetic**, where the user's complaint is visual. ORACLE 19 reads
   the pane for `EXPLORER` because every geometry layer once reported success while showing no files.
+- **An oracle must never restate the list it polices.** Oracle 23d hardcoded the panel labels that
+  image-paste excludes; it named a `Files` panel that had been removed and never named `Preview`,
+  which existed — so a pasted path could be typed into the Preview pane and the gate was structurally
+  incapable of noticing. It now derives the labels from the `[[panes]]` titles in the manifest, the
+  same rule the geometry suites follow by parsing `open-panel.sh`.
 
 ## 8. Known risks
 

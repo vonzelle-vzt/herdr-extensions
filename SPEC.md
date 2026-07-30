@@ -34,11 +34,21 @@ does them right, is idempotent, and is fully reversible.
 - **`herdr-fmt`**, the formatter resolver (see below).
 - **Dependencies**, only if absent: `spiceedit`, `lazygit`, a Nerd Font, `prettier`.
 
-### Out of scope for v1
+### Out of scope for this package
 
-Inline git blame, LSP/diagnostics, a file-history panel, and filtering ignored dirs out of the tree.
-All four need changes *inside* SpiceEdit, which has no extension API — so they go upstream as PRs to
-`cloudmanic/spice-edit` (MIT), not into this package. Tracked in `UPSTREAM.md`.
+Anything that needs to happen *inside the editor* is out of scope here, because this package is an
+installer and the editor has no extension API. Those changes land in the
+[herdr-edit](https://github.com/vonzelle-vzt/herdr-edit) fork instead, and the ones that are
+generally useful go upstream as PRs to `cloudmanic/spice-edit` (MIT). Tracked in `UPSTREAM.md`.
+
+The original v1 list named four such items. Three have since shipped in the fork — **LSP and inline
+diagnostics**, a **file-history view** (the Blame panel, file-scoped `git log` + `git show --stat`),
+and **filtering ignored dirs out of the tree** (gitignore-aware, with an off switch). **Inline git
+blame** — author and commit on the cursor's line — is the one still owed, and is still earmarked
+for upstream.
+
+Permanently out of scope, regardless of where it would live: a plugin system, a TOML library, a DAP
+client, Windows support, and patching herdr itself.
 
 ## Design decisions (each one is a bug this package prevents)
 
