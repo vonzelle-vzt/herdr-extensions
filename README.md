@@ -493,10 +493,18 @@ is the git UI. Gluing the three together correctly takes about ten steps, severa
 
 ```bash
 brew tap vonzelle-vzt/herdr-extensions https://github.com/vonzelle-vzt/herdr-extensions
+brew trust vonzelle-vzt/herdr-extensions      # see below — recent Homebrew requires this
 brew install vonzelle-vzt/herdr-extensions/herdr-extensions
 herdr-extensions install
 herdr-extensions doctor        # confirm every moving part
 ```
+
+> **`brew trust` is not optional on current Homebrew.** Recent versions refuse to load a formula
+> from any third-party tap that has not been explicitly trusted, failing with *"Refusing to load
+> formula … from untrusted tap"*. That reads like the tap or the formula is broken, and it is
+> neither — it is Homebrew declining to run code from a tap you have not vouched for, which is a
+> reasonable default. The same applies to the editor's tap
+> (`brew trust vonzelle-vzt/herdr-edit`). Trust it only because you have read what it installs.
 
 **Without Homebrew** — clones to `~/.local/share/herdr-extensions` and links into `~/.local/bin`:
 
