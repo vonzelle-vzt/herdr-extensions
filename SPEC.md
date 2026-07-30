@@ -207,6 +207,24 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
     tree every cycle. So: **wait for the artifact, not the process**, then reap by
     `--user-data-dir`, which is why the panel uses a dedicated profile it can safely `pkill`.
 
+17. **A documented install path that nobody runs is a broken install path.** Three were broken at
+    once, and every one was unreachable from a dev checkout — which is the only way the package was
+    ever exercised:
+    * `install_deps` tapped `cloudmanic/spice-edit` (upstream, which ships `spice-edit.rb` only) while
+      installing `vonzelle-vzt/herdr-edit/herdr-edit` from a tap it never added. Skipped entirely
+      whenever `editor_bin()` already finds an editor, so it worked on every machine that had ever
+      worked and failed on every machine that had not.
+    * The README documented `brew tap` + `brew install` for this package while there was no
+      `Formula/` directory. The tap succeeded and the install failed with "No available formula".
+    * 🔴 `REPO` used `abspath(__file__)`, which does not follow symlinks — and **both** install paths
+      put a symlink on `PATH` (`install.sh` does `ln -sf`, the formula links out of `libexec`). Every
+      command needing a package file died with `package file missing: <symlink dir>/plugin/...`.
+      `version` still worked, because it needs no package files, which is precisely why running
+      `./bin/herdr-extensions` from a checkout never revealed any of it.
+    The lesson is narrow and worth stating: **the artefact users receive is not the artefact you
+    test.** Oracle 25 now checks tap/install agreement and symlinked invocation, and the formula is
+    installed for real in CI-like conditions rather than reasoned about.
+
 ## Verification (each must pass before release)
 
 | # | Check | Oracle |
@@ -234,6 +252,7 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 | 22 | Focus is confirmed, never assumed | `plugin action invoke` resolves the globally focused pane, so the harness waits until `pane list` reports the target focused instead of sleeping. A `sleep 1` here was always a race and only lost it once another workspace-creating oracle was added ahead of oracle 6 |
 | 23 | Image paste targets the agent, not a panel | Against a stubbed herdr: an explicit file resolves to an absolute path (compared RESOLVED — macOS `$TMPDIR` is a symlink); a focused agent receives it; focus on ANY of the nine panel labels still delivers to the agent; the fallback stays in the focused pane's own tab rather than a stranger elsewhere; no Enter is sent and a trailing space is; `--clipboard-only` refuses instead of pasting a stale screenshot; `--prune` removes old clips only — `tests/check-image-paste.sh` |
 | 24 | Preview renders and leaks nothing | Against stub chafa/chrome with a Chrome path containing a SPACE: the templated assignments are quoted; an explicit URL is captured and drawn; **no Chrome survives a frame**; a frame completes in bounded time even though the stub browser never exits; no dev server yields an explanation naming `HERDR_PREVIEW_URL`; a missing renderer is named with its fix. The oracle is itself hard-bounded — the regression it catches is a hang, and a gate that hangs is no better than one never run — `tests/check-preview.sh` |
+| 25 | Install paths actually resolve | Every tapped formula is installed from the tap that is added (parsed out of `install_deps`, not hardcoded); the editor tap is the repo holding `Formula/herdr-edit.rb`; upstream is never tapped for our formula; and the CLI works when invoked **through a symlink**, which is how both documented install paths reach it — `tests/check-deps.sh`, mutation-checked by restoring `abspath` |
 | 20 | The gate runs every suite | `live-check.sh` delegates to `check-panels.sh`, `check-viability.sh` and `check-project-resolve.sh` rather than reimplementing them, and restores the originally focused workspace when it is done |
 
 ## Distribution

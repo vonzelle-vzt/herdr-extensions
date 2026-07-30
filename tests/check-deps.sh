@@ -102,6 +102,38 @@ else
   ok "25c: the editor step does not tap upstream, which ships spice-edit.rb only"
 fi
 
+# --- 25d: the CLI must work when invoked through a SYMLINK -------------------------------------
+# Both documented install paths put a symlink on PATH -- install.sh does `ln -sf` into ~/.local/bin,
+# and the Homebrew formula links out of libexec. REPO used abspath(__file__), which does not follow
+# symlinks, so it resolved to the symlink's own directory and every command needing a package file
+# died with "package file missing: <that dir>/plugin/herdr-plugin.toml".
+#
+# `version` still worked, because it needs no package files -- which is why running from a checkout
+# never revealed it. This asserts on a command that DOES need them.
+LTMP="$(mktemp -d)"
+trap 'rm -rf "$LTMP"' EXIT
+ln -sf "$ROOT/bin/herdr-extensions" "$LTMP/herdr-extensions"
+if out="$("$LTMP/herdr-extensions" install --dry-run 2>&1)"; then
+  if printf '%s' "$out" | grep -q "package file missing"; then
+    no "25d: symlinked invocation cannot find its package files"
+  else
+    ok "25d: works when invoked through a symlink (both install paths use one)"
+  fi
+else
+  if printf '%s' "$out" | grep -q "package file missing"; then
+    no "25d: symlinked invocation failed — REPO is not resolving through the symlink"
+  else
+    no "25d: symlinked invocation exited non-zero: $(printf '%s' "$out" | tail -2)"
+  fi
+fi
+
+# And the specific root cause, so it cannot regress by a one-word edit.
+if grep -q "os.path.realpath(__file__)" "$ROOT/bin/herdr-extensions"; then
+  ok "25d: REPO is derived with realpath, which follows symlinks"
+else
+  no "25d: REPO must use realpath(__file__), not abspath — symlinked installs break otherwise"
+fi
+
 echo
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
