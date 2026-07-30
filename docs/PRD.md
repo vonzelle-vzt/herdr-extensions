@@ -1,6 +1,6 @@
 # herdr-extensions — PRD
 
-**Status:** shipped, v0.8.0 · **Owner:** vonzelle-vzt · **Last reviewed:** 2026-07-30
+**Status:** shipped, v0.9.1 · **Owner:** vonzelle-vzt · **Last reviewed:** 2026-07-30
 
 [SPEC.md](../SPEC.md) is the engineering authority — every design decision and the bug it prevents.
 This document is the *product* view: who it is for, what problem it solves, what is deliberately out

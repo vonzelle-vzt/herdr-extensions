@@ -111,7 +111,10 @@ fi
 # an unrelated project.
 pane="$("$herdr_bin" pane list 2>/dev/null | "$PY" -c "
 import sys, json
-PANELS = {'Edit', 'Git', 'Problems', 'Search', 'TODO', 'Debug', 'Blame', 'Markdown', 'Tests', 'Files'}
+# Must match the [[panes]] titles in herdr-plugin.toml exactly. Oracle 23d derives its list from
+# that manifest and fails on any drift — it had to, because this set once named a 'Files' panel that
+# no longer exists while omitting 'Preview', making the Preview panel a legal target for a path.
+PANELS = {'Edit', 'Git', 'Problems', 'Search', 'TODO', 'Debug', 'Blame', 'Markdown', 'Preview', 'Tests'}
 try:
     panes = json.load(sys.stdin)['result']['panes']
 except Exception:

@@ -85,7 +85,7 @@ You install one thing. It brings the rest:
       ┌───────────────────────┼───────────────────────┐
       │                       │                       │
       ▼                       ▼                       ▼
- registers a           installs the            injects 13
+ registers a           installs the            injects 14
  herdr plugin          dependencies            keybindings
  (11 panels)           you don't have          (collision-checked
       │                       │                 against herdr's 39)
