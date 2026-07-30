@@ -176,6 +176,11 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
     anyone who moved their captures — then an explicit file, which is also what a Finder drop gives
     you. `--clipboard-only` suppresses the fallback: a deliberate keypress may reach for the last
     screenshot, but a "paste THIS" that silently pastes something else is astonishing.
+    🔴 That check must assert the CONTRACT ("never the fallback"), not the environment. An earlier
+    version tried to isolate itself by hiding `pngpaste` behind `PATH=/usr/bin:/bin`, which never
+    worked — the script prepends Homebrew to PATH itself, correctly — so it passed only while the
+    machine's clipboard happened to hold no image, and failed the moment one did. An
+    environment-dependent oracle is worse than no oracle: it erodes trust in the whole gate.
     🔴 The pane choice is the hard part, not the typing. Focus is usually parked on one of OUR panels
     (the editor auto-opens focused) and a path typed into the file tree does nothing at all, silently.
     So: the focused pane only if it is not one of ours, then an agent in the same tab, then the same

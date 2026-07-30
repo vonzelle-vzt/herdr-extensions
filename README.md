@@ -6,8 +6,55 @@ Make [herdr](https://herdr.dev) behave like a tiny VS Code, in one command.
 herdr-extensions install
 ```
 
-Inline diagnostics, a real editor panel, source control, search, problems, a debugger, and a
-VS Code skin — wired up, keybound, collision-checked, and completely reversible.
+Inline diagnostics, a real editor panel, source control, search, problems, a debugger, a live
+preview of your app, screenshot paste, and a VS Code skin — wired up, keybound, collision-checked,
+and completely reversible.
+
+## About
+
+[herdr](https://herdr.dev) is an agent multiplexer: workspaces, tabs and panes for running coding
+agents in a terminal, with a session that survives a dropped SSH connection. It has a plugin system
+but no editor, no source-control UI, and no diagnostics.
+
+**herdr-extensions is the IDE half.** It turns a herdr session into something shaped like VS Code —
+file tree and editor on the left, agent on the right, eleven panels a keypress away — while staying a
+terminal, so the whole thing still works over SSH and survives a disconnect.
+
+### Who it is for
+
+Anyone who runs a coding agent in a terminal and misses the parts of an IDE that make a codebase
+navigable: seeing the tree, jumping to a definition, reading diagnostics inline, glancing at a diff,
+looking at the app you are building. Especially over SSH, where a GUI editor is not an option.
+
+### What it is not
+
+It is an **installer**, not a framework. There is no plugin manager, no extension marketplace, no
+config DSL. It writes a herdr plugin manifest, a handful of scripts, and a marker-delimited block of
+keybindings — then gets out of the way. `uninstall` restores your `config.toml` byte-for-byte.
+
+### How it fits together
+
+```
+        ┌──────────────────────────────────────────────────────┐
+        │ herdr            workspaces · tabs · panes · session │
+        └───────────────────────────┬──────────────────────────┘
+                                    │ plugin manifest + keybindings
+        ┌───────────────────────────▼──────────────────────────┐
+        │ herdr-extensions      this repo: installer + panels  │
+        │   editor · git · problems · search · todo · blame    │
+        │   markdown · tests · debug · preview · image paste   │
+        └──────┬──────────────────────────────┬────────────────┘
+               │ pane command                 │ pane command
+        ┌──────▼────────────┐         ┌───────▼─────────────────┐
+        │ herdr-edit        │         │ lazygit, ripgrep, tsc,  │
+        │ editor + LSP      │         │ eslint, ruff, vitest…   │
+        └───────────────────┘         └─────────────────────────┘
+```
+
+Three separate pieces, deliberately. [herdr-edit](https://github.com/vonzelle-vzt/herdr-edit) is a
+fork of [SpiceEdit](https://github.com/cloudmanic/spice-edit) and owns everything that must live
+*inside* an editor (LSP, word wrap, the file tree). This repo owns wiring, layout and the panels.
+herdr owns the panes. Nothing here patches herdr itself.
 
 ## Why one command matters
 
@@ -143,6 +190,69 @@ anywhere else. Dropping a path into a live session in an unrelated project is wo
 Staged clipboard images land in `~/.vzt/shots`; `image-paste.sh --prune [DAYS]` clears old ones and
 `doctor` warns once there are more than 200.
 
+## Guides
+
+### First five minutes
+
+```bash
+herdr-extensions install     # installs deps, writes the plugin, injects keybindings
+herdr-extensions doctor      # verifies every moving part and names any failure
+herdr                        # start a session
+```
+
+Then `herdr workspace create --cwd ~/code/my-project --label "my project"` — or open a project any
+way you like. The editor appears on its own, already scoped to the repo.
+
+Set your terminal font to a Nerd Font first (see [File icons](#file-icons-need-one-manual-step)) or
+the file tree shows boxes. Ghostty is the recommended host: it is the only one of the common macOS
+terminals that does inline images, OSC 52 clipboard, *and* Nerd Fonts.
+
+### Day-to-day: reading a codebase
+
+| Want | Do |
+| --- | --- |
+| See the tree | it is already there — the editor auto-opens per project |
+| Jump to a definition | `Esc d` in the editor |
+| What is this symbol? | `Esc h` |
+| Find a file | `Esc p` |
+| Find in this file | `Esc f` |
+| Search the repo | `ctrl+b` `shift+f` |
+| What is broken? | `ctrl+b` `shift+m` |
+| Who wrote this line? | `ctrl+b` `shift+b` |
+| Long lines running off? | `Esc z` toggles word wrap |
+
+### Day-to-day: shipping
+
+| Want | Do |
+| --- | --- |
+| Stage and commit | `ctrl+b` `shift+s` (lazygit — interactive staging alone is worth the panel) |
+| Run the tests | `ctrl+b` `shift+u` |
+| See the app | `ctrl+b` `shift+a` |
+| Show the agent a screenshot | copy it, then `ctrl+b` `i` |
+| Show the agent a file | drag it onto the prompt |
+| More room for the editor | `ctrl+b` `shift+l` |
+
+### Working with an agent
+
+The two habits that matter most, because they are the ones a terminal normally makes hard:
+
+**Show, don't describe.** `ctrl+b` `i` types the path of a clipboard image onto the prompt without
+submitting, so you add your question after it. Screenshot a broken layout and ask about *that*
+rather than writing a paragraph describing it.
+
+**Keep the code visible.** The editor sits left of the agent, so you can read what it is changing
+while it changes it. `ctrl+b` `shift+l` / `shift+h` shifts the balance when you need more of one.
+
+### Uninstalling
+
+```bash
+herdr-extensions uninstall           # plugin + keybindings; your config.toml is restored exactly
+herdr-extensions uninstall --purge   # also removes the editor configs it wrote
+```
+
+Nothing is left behind between the managed markers, and your own keys, comments and settings survive
+both directions.
+
 ## Troubleshooting
 
 Run `herdr-extensions doctor` first — it checks every moving part and names the specific failure.
@@ -162,6 +272,12 @@ anything bound to `prefix+r` removes pane resizing entirely — the symptom is a
 stuck rather than a missing keybinding. The `persiyanov.reviewr` plugin binds `prefix+r` by default;
 move it to `prefix+shift+c`. `doctor --keymap` names this specific collision, and note that
 `prefix+shift+r` is *also* reserved, so it is not the escape hatch it looks like.
+
+**Dragging the divider with the mouse does nothing.** That is herdr, not this package: 0.7.5 has no
+divider-drag action at all — its keybinding table contains `resize_mode` and nothing else for
+resizing. `ctrl+b` `shift+l` / `shift+h` nudge the divider one step each, which is the closest
+substitute available from outside herdr. (`mouse_capture = true` also forwards mouse events to any
+pane app that requests them, so a drag starting *inside* a pane reaches that app rather than herdr.)
 
 **The panel is too big, or says "Window too small — please resize".** These are the same problem.
 `herdr plugin pane open` has no `--ratio`, so plugin panels open at a hard 50/50, while the editor
@@ -201,7 +317,7 @@ first-rate terminal editor with no plugin system *by design*. [lazygit](https://
 is the git UI. Gluing the three together correctly takes about ten steps, several of which fail
 **silently** when you get them wrong. This does them right:
 
-- registers a herdr plugin providing the editor, git, and eight more panels
+- registers a herdr plugin providing the editor, git, and nine more panels
 - renders every pane command to an **absolute path** (the herdr server runs under launchd's minimal
   `PATH`, so a bare `spiceedit` never spawns — and the right absolute path differs on Apple Silicon,
   Intel, and Linux)
@@ -295,9 +411,11 @@ Anything else that needs to live *inside* the editor lives in
 ./bin/herdr-extensions doctor        # read-only, safe anywhere
 ./bin/herdr-extensions install --dry-run
 ./tests/live-check.sh                # behavioral oracles against a running herdr
-./tests/check-panels.sh              # 25 panel oracles — no server needed
+./tests/check-panels.sh              # 28 panel oracles — no server needed
 ./tests/check-viability.sh           # split-vs-tab decision, against a stubbed herdr
 ./tests/check-project-resolve.sh     # which repo a workspace opens, against a stubbed herdr
+./tests/check-image-paste.sh         # image resolution + which pane gets the path
+./tests/check-preview.sh             # preview renders, and leaks no Chrome
 /usr/bin/python3 tests/check-sizing.py   # panel geometry, against a fixture
 ```
 

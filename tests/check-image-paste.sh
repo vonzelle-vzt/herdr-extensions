@@ -149,18 +149,40 @@ else
   no "23f: no trailing space after the path"
 fi
 
-# --- 23g: --clipboard-only refuses rather than grabbing a stale screenshot ----------------------
-# A deliberate keypress may fall back; a "paste THIS" must not silently paste something else.
+# --- 23g: --clipboard-only NEVER falls back to a screenshot -------------------------------------
+# A deliberate keypress may reach for the last screenshot; a "paste THIS" that silently pastes
+# something else is astonishing. So the contract is "never the fallback", and that is what is asserted.
+#
+# NOT asserted by emptying the clipboard or hiding pngpaste. An earlier version set PATH=/usr/bin:/bin
+# to hide it, which never worked -- the script prepends Homebrew to PATH itself, correctly, so the real
+# pngpaste was always found. That version passed only while the machine's clipboard happened to hold no
+# image, and broke the moment one did: an environment-dependent oracle, which is worse than none.
+mkdir -p "$TMP/Desktop"
+FALLBACK="$TMP/Desktop/screenshot-fallback.png"
+cp "$IMG" "$FALLBACK"
 : > "$LOG"
-if HERDR_BIN_PATH="$TMP/herdr" HERDR_STUB_LOG="$LOG" HERDR_STUB_PANES="$(panes agent)" \
-   PATH="/usr/bin:/bin" /bin/bash "$SCRIPT" --clipboard-only >/dev/null 2>&1; then
-  no "23g: --clipboard-only succeeded with no clipboard image available"
+got="$(HERDR_BIN_PATH="$TMP/herdr" HERDR_STUB_LOG="$LOG" HERDR_STUB_PANES="$(panes agent)" \
+        HOME="$TMP" /bin/bash "$SCRIPT" --print --clipboard-only 2>/dev/null || true)"
+if [ "$got" = "$FALLBACK" ]; then
+  no "23g: --clipboard-only fell back to a screenshot ($got)"
+elif [ -z "$got" ]; then
+  ok "23g: --clipboard-only refuses outright when the clipboard holds no image"
 else
-  if grep -q "send-text" "$LOG"; then
-    no "23g: --clipboard-only injected something despite failing"
+  ok "23g: --clipboard-only used the clipboard, never the screenshot fallback"
+fi
+
+# ...and WITHOUT the flag the fallback is allowed, which is what makes the flag meaningful. Only
+# checked when the clipboard is empty of images, since a real clipboard image legitimately wins.
+if [ -z "$got" ]; then
+  got2="$(HERDR_BIN_PATH="$TMP/herdr" HERDR_STUB_LOG="$LOG" HERDR_STUB_PANES="$(panes agent)" \
+           HOME="$TMP" /bin/bash "$SCRIPT" --print 2>/dev/null || true)"
+  if [ "$got2" = "$FALLBACK" ]; then
+    ok "23g: without the flag it does fall back to the newest screenshot"
   else
-    ok "23g: --clipboard-only refuses instead of pasting a stale screenshot"
+    no "23g: expected the screenshot fallback, got '${got2:-<nothing>}'"
   fi
+else
+  ok "23g: fallback case skipped — a real clipboard image is present"
 fi
 
 # --- 23h: --prune deletes only old staged shots ------------------------------------------------
