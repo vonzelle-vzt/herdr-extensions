@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -472,7 +472,13 @@ def render_plugin(dry, projects_root):
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
         which("google-chrome") or "", which("chromium") or "",
     ) if c and os.path.exists(c)), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-    files += [(n, open(p).read().replace("@@CHAFA@@", chafa).replace("@@CHROME@@", chrome), 0o755)
+    # @@SPICEEDIT@@ is substituted into panels as well as the manifest: the Review panel shells the
+    # editor with --open-at so a reviewer can jump from a line in the agent's diff to that line in a
+    # real editor. Same launchd-PATH reason as CHAFA/CHROME -- a bare binary name never resolves.
+    files += [(n, open(p).read()
+               .replace("@@CHAFA@@", chafa)
+               .replace("@@CHROME@@", chrome)
+               .replace("@@SPICEEDIT@@", spice), 0o755)
               for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
     for name, body, mode in files:
         dst = os.path.join(PLUGIN_DST, name)

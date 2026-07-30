@@ -274,7 +274,7 @@ that is absent.
 | **Debug** | Parses the repo's `.vscode/launch.json` — comments and trailing commas included, because it is JSONC — lists the configurations, and hands off to an installed adapter (`koan-debugger`, `debugger-cli`, `dlv`, `lldb-dap`, `tdb`). |
 | **Markdown** | `glow -s dark` on the active file. |
 | **Tests** | Detects vitest / jest / pytest from `package.json` or `pyproject.toml`. |
-| **Review** | The agent's diff against your branch's merge-base, with line numbers. Type `path:line your note`, collect as many as you like, and one key sends them all back to the **agent pane** as a single message. |
+| **Review** | The agent's diff against your branch's merge-base, with line numbers. Type `path:line your note`, collect as many as you like, and one key sends them all back to the **agent pane** as a single message. Or type `e path:line` and **open that line in the editor to fix it yourself** — every other review plugin in the marketplace is read-only, so being able to edit from the review is the part nobody else has. |
 | **Git** | `lazygit`. Interactive staging alone is worth the panel — plus an **AI commit message** command that drafts a subject line from the staged diff with your local `claude` CLI. |
 
 Every command they run is resolved to an **absolute path**, because the herdr server runs under

@@ -48,6 +48,11 @@ EOF
 )"
 
 repo="$active_root"
+repo_root="$repo"
+# Absolute, because the herdr server runs under launchd with
+# PATH=/usr/bin:/bin:/usr/sbin:/sbin -- a bare `herdr-edit` never resolves and the
+# action would silently do nothing. Quoted because the rendered path may contain spaces.
+EDITOR_BIN="@@SPICEEDIT@@"
 if [ -z "$repo" ] || [ ! -d "$repo" ]; then
   base="${active_file:-$PWD}"
   dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
@@ -285,6 +290,7 @@ send_notes() {
 print_diff
 
 echo "Type a note as  path:line comment text"
+echo "  e  path:line   open that location in the editor and FIX it"
 echo "  s  send all accumulated notes to the agent pane, then clear them"
 echo "  b  flip the baseline (branch merge-base <-> HEAD) and reprint the diff"
 echo "  q  quit this panel"
@@ -306,6 +312,30 @@ while IFS= read -r line; do
       fi
       echo
       print_diff
+      ;;
+    e\ *)
+      # Reading a diff and being able to FIX it is the whole difference between
+      # this and every read-only viewer in the marketplace. The editor is
+      # already running in a pane beside this one, so hand it the location
+      # rather than opening a second copy: --open-at writes an open-request that
+      # the running editor picks up on its next event-loop tick.
+      loc="${line#e }"
+      loc="$(printf '%s' "$loc" | tr -d '[:space:]')"
+      if [ -z "$loc" ]; then
+        echo "usage: e path:line"
+      elif [ ! -x "$EDITOR_BIN" ]; then
+        echo "editor not found at $EDITOR_BIN -- cannot open $loc"
+      else
+        target="${loc%%:*}"
+        if [ -n "$repo_root" ] && [ ! -e "$target" ] && [ -e "$repo_root/$target" ]; then
+          loc="$repo_root/$loc"
+        fi
+        if "$EDITOR_BIN" --open-at "$loc" 2>/dev/null; then
+          echo "opened $loc in the editor"
+        else
+          echo "could not open $loc"
+        fi
+      fi
       ;;
     "") ;;
     *)
