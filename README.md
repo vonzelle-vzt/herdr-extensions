@@ -47,6 +47,14 @@ keybindings — then gets out of the way. `uninstall` restores your `config.toml
 
 ### What you get on screen
 
+<p align="center">
+  <img src="docs/assets/demo.gif"
+       alt="The editor herdr-extensions installs: a Go project's file tree, a live gopls diagnostic inline at the end of the offending line, the command palette, the outline and the diff view."
+       width="100%">
+</p>
+
+That is `herdr-edit`, the editor this installs for you, running against a real `gopls`.
+
 One command turns a bare herdr pane into this:
 
 ```

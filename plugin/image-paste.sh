@@ -31,12 +31,14 @@ note() { printf 'image-paste: %s\n' "$*" >&2; }
 print_only=0
 clipboard_only=0
 watch_mode=0
+probe_mode=0
 args=()
 for a in "$@"; do
   case "$a" in
     --print) print_only=1 ;;
     --clipboard-only) clipboard_only=1 ;;
     --watch) watch_mode=1 ;;
+    --probe) probe_mode=1 ;;
     --prune)
       days="${2:-14}"
       [ -d "$SHOT_DIR" ] || { note "nothing to prune"; exit 0; }
@@ -50,6 +52,35 @@ done
 set -- ${args[@]+"${args[@]}"}
 
 mkdir -p "$SHOT_DIR" 2>/dev/null || { note "cannot create $SHOT_DIR"; exit 1; }
+
+# --- probe mode ---------------------------------------------------------------------------------
+# Drag-and-drop of a FILE is handled by the terminal emulator, not by herdr and not by us: the
+# terminal turns the drop into typed text (the POSIX path) and that text travels the normal input
+# path. When a drop "does nothing", the useful question is therefore not what WE do with it but
+# whether any bytes arrive at all -- and that is answerable only by looking.
+#
+# This prints every byte the pane receives, so a drop that produces nothing is distinguishable from
+# a drop that produces a path something later discards. Guessing between those two has already
+# wasted more time than the probe took to write.
+if [ "$probe_mode" = 1 ]; then
+  echo "Input probe — every byte this pane receives is printed below."
+  echo
+  echo "  Drag an image file onto this window now."
+  echo "  Nothing at all appearing means the TERMINAL is not turning the drop into text,"
+  echo "  and no plugin can fix that from inside. A path appearing means the drop works"
+  echo "  and whatever consumes it is the thing to look at."
+  echo
+  echo "  Ctrl+C to stop."
+  echo
+  while IFS= read -r -n1 -s ch; do
+    if [ -z "$ch" ]; then
+      printf '  [newline]\n'
+    else
+      printf '%s' "$ch" | od -An -c | tr -s " " | sed "s/^ /  /"
+    fi
+  done
+  exit 0
+fi
 
 # --- watch mode ---------------------------------------------------------------------------------
 # WHY THIS EXISTS. herdr cannot receive a Finder drag-and-drop locally: its own config documents
@@ -83,6 +114,8 @@ $d"
   printf '%s\n' "$watch_dirs" | sed "s|^|  |"
   echo
   echo "Ctrl+C to stop."
+  echo "If a Finder drag-and-drop onto this window does nothing, run the probe to find out why:"
+  echo "  herdr plugin action invoke paste-image --plugin herdr-extensions -- --probe"
   echo
 
   # Only files created AFTER the watcher starts. Without this marker the first tick would dump
