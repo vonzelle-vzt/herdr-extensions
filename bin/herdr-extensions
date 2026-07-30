@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.8.1"
+VERSION = "0.9.0"
 
 HOME = os.path.expanduser("~")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -738,9 +738,14 @@ def install_deps(dry):
     brew = which("brew")
     steps = []
     if not editor_bin():
+        # 🔴 The tap must be the repo that CONTAINS the formula. This tapped
+        # cloudmanic/spice-edit (upstream, which ships spice-edit.rb only) while installing from
+        # vonzelle-vzt/herdr-edit — a tap that was therefore never added, so a fresh install died
+        # with "No available formula or cask ... This command requires the tap vonzelle-vzt/herdr-edit".
+        # Anyone who already had the editor never saw it, because this whole branch is skipped then.
         steps.append(("herdr-edit", ["brew", "install", "vonzelle-vzt/herdr-edit/herdr-edit"],
-                      ["brew", "tap", "cloudmanic/spice-edit",
-                       "https://github.com/cloudmanic/spice-edit"]))
+                      ["brew", "tap", "vonzelle-vzt/herdr-edit",
+                       "https://github.com/vonzelle-vzt/herdr-edit"]))
     if not which("lazygit"):
         steps.append(("lazygit", ["brew", "install", "lazygit"], None))
     if not nerd_font_installed():

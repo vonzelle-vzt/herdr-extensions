@@ -332,7 +332,7 @@ fi
 # not: three of the four offline suites existed and it ran none of them, so a gate that looked green
 # had never executed 39 of its own oracles. Each is delegated rather than reimplemented, so there is
 # still exactly one definition of every check.
-for suite in check-panels check-viability check-project-resolve check-image-paste check-preview; do
+for suite in check-panels check-viability check-project-resolve check-image-paste check-preview check-deps; do
   if [ ! -x "$ROOT/tests/$suite.sh" ]; then
     no "$suite.sh missing or not executable"
   elif out="$("$ROOT/tests/$suite.sh" 2>&1)"; then

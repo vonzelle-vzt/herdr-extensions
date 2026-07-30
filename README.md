@@ -1,10 +1,23 @@
+<p align="center">
+  <picture>
+    <source srcset="docs/assets/banner.webp" type="image/webp">
+    <img src="docs/assets/banner.jpg"
+         alt="herdr-extensions — Turn herdr into a terminal IDE in one command. Installer plus panels plus VS Code skin, showing an editor with a file explorer and source control, and panel tiles for Editor Panel, Source Control, Problems, Search, Debug, Tests, Live Preview, Image Paste and VS Code Skin."
+         width="100%">
+  </picture>
+</p>
+
 # herdr-extensions
 
-Make [herdr](https://herdr.dev) behave like a tiny VS Code, in one command.
+Turn [herdr](https://herdr.dev) into a terminal IDE, in one command.
 
 ```
 herdr-extensions install
 ```
+
+That single command installs **everything** — the editor, `lazygit`, a Nerd Font, `prettier` — then
+registers eleven panels, injects the keybindings, and checks them against herdr's own so nothing of
+yours breaks. There is no second step and no companion package to go and fetch.
 
 Inline diagnostics, a real editor panel, source control, search, problems, a debugger, a live
 preview of your app, screenshot paste, and a VS Code skin — wired up, keybound, collision-checked,
@@ -32,29 +45,110 @@ It is an **installer**, not a framework. There is no plugin manager, no extensio
 config DSL. It writes a herdr plugin manifest, a handful of scripts, and a marker-delimited block of
 keybindings — then gets out of the way. `uninstall` restores your `config.toml` byte-for-byte.
 
+### What you get on screen
+
+One command turns a bare herdr pane into this:
+
+```
+┌─ herdr ────────────────────────────────────────────────────────────────────┐
+│ ┌─ Edit ───────────────────┐ ┌─ agent ────────────────────────────────────┐│
+│ │ EXPLORER                 │ │                                            ││
+│ │ my-project               │ │  > add a health check endpoint             ││
+│ │ ▾  src/                  │ │                                            ││
+│ │   ▸  api/                │ │  I'll add it to src/api/routes.ts and      ││
+│ │      routes.ts    M      │ │  wire up a test…                           ││
+│ │      server.ts           │ │                                            ││
+│ │ ▸  tests/                │ │                                            ││
+│ │    package.json          │ │                                            ││
+│ │                          │ │                                            ││
+│ │  12  export function …   │ │                                            ││
+│ │  13    ~~~~~~~~~~~~      │ │                                            ││
+│ │      ↑ inline diagnostic │ │                                            ││
+│ └──────────────────────────┘ └────────────────────────────────────────────┘│
+│ ┌─ Problems ─────────────────────────────────────────────────────────────┐ │
+│ │ src/api/routes.ts:13  error  Property 'healthz' does not exist         │ │
+│ └────────────────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────────────────┘
+   ctrl+b shift+e  editor      ctrl+b shift+m  problems    ctrl+b shift+a  preview
+```
+
+Editor left, agent right, panels a keypress away — all inside one terminal, so it works over SSH and
+survives a disconnect.
+
 ### How it fits together
 
+You install one thing. It brings the rest:
+
 ```
-        ┌──────────────────────────────────────────────────────┐
-        │ herdr            workspaces · tabs · panes · session │
-        └───────────────────────────┬──────────────────────────┘
-                                    │ plugin manifest + keybindings
-        ┌───────────────────────────▼──────────────────────────┐
-        │ herdr-extensions      this repo: installer + panels  │
-        │   editor · git · problems · search · todo · blame    │
-        │   markdown · tests · debug · preview · image paste   │
-        └──────┬──────────────────────────────┬────────────────┘
-               │ pane command                 │ pane command
-        ┌──────▼────────────┐         ┌───────▼─────────────────┐
-        │ herdr-edit        │         │ lazygit, ripgrep, tsc,  │
-        │ editor + LSP      │         │ eslint, ruff, vitest…   │
-        └───────────────────┘         └─────────────────────────┘
+                    herdr-extensions install
+                              │
+      ┌───────────────────────┼───────────────────────┐
+      │                       │                       │
+      ▼                       ▼                       ▼
+ registers a           installs the            injects 13
+ herdr plugin          dependencies            keybindings
+ (11 panels)           you don't have          (collision-checked
+      │                       │                 against herdr's 39)
+      │                       ├─ herdr-edit ── the editor + LSP
+      │                       ├─ lazygit ───── source control
+      │                       ├─ Nerd Font ─── file icons
+      │                       └─ prettier ──── format on save
+      ▼
+ ┌──────────────────────────────────────────────────────────────┐
+ │ herdr        workspaces · tabs · panes · session over SSH    │
+ └──────────────────────────────────────────────────────────────┘
 ```
 
-Three separate pieces, deliberately. [herdr-edit](https://github.com/vonzelle-vzt/herdr-edit) is a
-fork of [SpiceEdit](https://github.com/cloudmanic/spice-edit) and owns everything that must live
-*inside* an editor (LSP, word wrap, the file tree). This repo owns wiring, layout and the panels.
-herdr owns the panes. Nothing here patches herdr itself.
+**The editor is not a separate step.** `install` runs
+`brew install vonzelle-vzt/herdr-edit/herdr-edit` for you when it is missing, so
+[herdr-edit](https://github.com/vonzelle-vzt/herdr-edit) arrives as part of this package. You only
+need to know it exists if you want to work on the editor itself — or if you would rather keep upstream
+[SpiceEdit](https://github.com/cloudmanic/spice-edit), which is also supported (you lose diagnostics;
+everything else behaves the same).
+
+Layers, and who owns what:
+
+| Layer | Owns | Provided by |
+| --- | --- | --- |
+| Session | workspaces, tabs, panes, survives SSH drop | **herdr** (third-party, unpatched) |
+| IDE | 11 panels, layout, keybindings, skin, installer | **this repo** (original work) |
+| Editing | buffer, rendering, LSP, word wrap, file tree | **herdr-edit** (installed for you) |
+| Tools | git UI, search, typecheck, lint, tests, preview | lazygit, ripgrep, tsc, eslint, ruff, vitest, Chrome |
+
+Nothing here patches herdr. Everything lands as a plugin manifest plus a marker-delimited block of
+keybindings, which is why `uninstall` can restore your config byte-for-byte.
+
+### Where this sits
+
+The obvious neighbours, on the axes that actually differ. Checked 2026-07-30; Orca figures come from
+its public repo (33.1k stars, TypeScript, `monaco-setup.ts`).
+
+| | VS Code | herdr alone | Orca | **herdr + this** |
+| --- | --- | --- | --- | --- |
+| Runs in a terminal | ✗ GUI app | ✓ | ✗ Electron desktop | ✓ |
+| Usable over plain SSH | Remote-SSH, GUI client still needed | ✓ | ✗ | ✓ |
+| Survives a dropped connection | ✗ | ✓ session persists | ✗ | ✓ |
+| Editor included | ✓ | ✗ none | ✓ Monaco | ✓ installed for you |
+| Diagnostics across languages | ✓ full LSP | ✗ | TypeScript only, via Monaco's bundled worker — no LSP client | ✓ real LSP (`gopls`, `rust-analyzer`, …) |
+| Runs a fleet of coding agents | ✗ | ✓ | ✓ | ✓ (herdr's job) |
+| Live preview of your app | extension | ✗ | ✓ | ✓ built in |
+| Paste a screenshot to the agent | n/a | `--remote` only | ✓ | ✓ local |
+| Source | open, MIT-ish core | source-available | **no licence file** | **MIT** |
+| Cost | free | free | paid tiers | free |
+
+Read it as positioning, not a takedown. VS Code is a better GUI IDE and always will be — it is not
+trying to survive an SSH drop. Orca is solving a genuinely different problem, an agent fleet on the
+desktop, and solving it well; its 33k stars are earned. herdr alone is deliberately not an IDE.
+
+What is actually unclaimed ground is the intersection: **an IDE that lives in a terminal, keeps real
+language intelligence, and comes back after your connection dies.** herdr's marketplace has 150+
+entries and none ships language intelligence. That gap is the whole reason this exists.
+
+Ideas were taken freely from all three — the panel layout is VS Code's, the agent-pane model is
+herdr's, and the ambition of an IDE built around agents is Orca's. **No code was.** There is no
+Monaco, no Electron, and no Orca-derived source anywhere in this repo or in herdr-edit; the only
+inherited code is spice-edit's, which is MIT and credited in
+[herdr-edit](https://github.com/vonzelle-vzt/herdr-edit).
 
 ## Why one command matters
 

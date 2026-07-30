@@ -28,7 +28,8 @@ ln -sf "$DEST/bin/herdr-extensions" "$BIN/herdr-extensions"
 chmod +x "$DEST/bin/herdr-extensions" "$DEST/plugin/open-panel.sh" "$DEST/libexec/herdr-fmt" \
          "$DEST/tests/live-check.sh" "$DEST/tests/check-panels.sh" \
          "$DEST/tests/check-viability.sh" "$DEST/tests/check-project-resolve.sh" \
-         "$DEST/tests/check-image-paste.sh" "$DEST/tests/check-preview.sh" 2>/dev/null || true
+         "$DEST/tests/check-image-paste.sh" "$DEST/tests/check-preview.sh" \
+         "$DEST/tests/check-deps.sh" 2>/dev/null || true
 
 echo
 echo "installed: $BIN/herdr-extensions"
