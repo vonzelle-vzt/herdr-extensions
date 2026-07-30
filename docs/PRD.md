@@ -84,6 +84,7 @@ whose whole premise is composing with a pane multiplexer.
 | **A command palette** | [herdr-command-palette](https://github.com/JanTvrdik/herdr-command-palette) | We have a fuzzy *file* finder but no fuzzy *command* search. Planned; the finder and the action tables both already exist. |
 | **LSP autocomplete** | nobody in this marketplace | The largest remaining "tiny VS Code" absence. Transport, UTF-16 conversion and the server registry are all in place. |
 | **AI commit messages** | [sidebar](https://github.com/alexarthurs/herdr-sidebar) | A lazygit custom command away. |
+| **Runtime diagnostics** — errors from the *running* app, mapped to `file:line` | [herdr-flutter](https://github.com/ablause/herdr-flutter) (live `Flutter.Error` + widget tree), [StructuPath/herdr-browser](https://github.com/StructuPath/herdr-browser) (console + page errors) | Problems is static analysis only. We already own both halves — Preview is pointed at the running app and Problems is the panel that lists faults — and nothing connects them. Strongest unclaimed extension of what we have. |
 | **Cross-file replace with preview** | — | The editor now has replace and a match-preview API; driving it repo-wide from the Search panel is not wired. |
 
 ### Deliberately out of scope, permanently
@@ -101,11 +102,23 @@ whose whole premise is composing with a pane multiplexer.
 
 ### Where we actually win
 
-Of 417 plugins carrying the `herdr-plugin` topic, **none ships language intelligence**. Every direct
-neighbour — file-viewer, reviewr, sidebar — is a read-only *viewer*. The defensible position is the
-one thing that cannot be done with a shell wrapper, because it needs a live process that has parsed
-the project: **a real editor with a real LSP client**, plus the build-loop panels (problems, tests,
-debug, live preview) that no other plugin offers at all.
+Swept 2026-07-30 across 417 plugins carrying the `herdr-plugin` topic, by topic listing and by
+keyword (`lsp`, `language server`, `autocomplete`, `refactor`, `formatter`, `snippet`, `minimap`,
+`multi-cursor`, `symbol`, `outline`, `lint`, `problems`, `blame`, `intellisense`, `go to
+definition`). Those terms surface exactly **two** repos: this one, natively, and
+[herdr-fresh](https://github.com/rvalledorjr/herdr-fresh) (1★), a thin launcher for the third-party
+[Fresh](https://getfresh.dev) editor. **No other plugin implements language intelligence**; one
+wraps an editor that has it.
+
+Every direct neighbour — file-viewer (290★), reviewr (283★), sidebar — is a read-only *viewer*. The
+defensible position is therefore the thing that cannot be done with a shell wrapper, because it
+needs a live process that has parsed the project: **a real editor with a real LSP client**, plus the
+build-loop panels (problems, tests, debug, live preview) that no other plugin offers at all.
+
+The corollary is the strategic risk, and it should stay written down: **the agent-workflow half of
+the space is where the ecosystem has converged and where all of our real gaps sit.** Line comments
+returned to the agent now has roughly eight independent implementations. Being uncontested on
+editor primitives does not help if the loop users actually run all day lives somewhere else.
 
 ## 5. Constraints that shape the design
 

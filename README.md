@@ -141,10 +141,18 @@ trying to survive an SSH drop. Orca is solving a genuinely different problem, an
 desktop, and solving it well; its 33k stars are earned. herdr alone is deliberately not an IDE.
 
 What is actually unclaimed ground is the intersection: **an IDE that lives in a terminal, keeps real
-language intelligence, and comes back after your connection dies.** herdr's marketplace is now
-**417 plugins** and not one of them ships language intelligence. That gap is the whole reason this
-exists — and it is the one gap a competitor cannot close with a shell wrapper, because it needs a
-live process that has parsed your project.
+language intelligence, and comes back after your connection dies.**
+
+That claim is worth stating precisely, because it is the whole reason this exists. Across the
+marketplace's **417 plugins** — swept by topic and by keyword for `lsp`, `language server`,
+`autocomplete`, `refactor`, `formatter`, `symbol`, `outline`, `lint`, `blame`, `intellisense` and
+`go to definition` — exactly **two** repos surface any of it. This one, natively. And
+[herdr-fresh](https://github.com/rvalledorjr/herdr-fresh) (1★), which is a thin launcher for
+[Fresh](https://getfresh.dev), a separate third-party terminal IDE that brings its own.
+
+So: no other plugin *implements* language intelligence, and one wraps an editor that has it. That
+is the gap a competitor cannot close with a shell wrapper, because it needs a live process that has
+parsed your project.
 
 Ideas were taken freely from all three — the panel layout is VS Code's, the agent-pane model is
 herdr's, and the ambition of an IDE built around agents is Orca's. **No code was.** There is no
@@ -183,10 +191,18 @@ herdr feel like an IDE. Star counts and features checked 2026-07-30.
 
 **What that table says.** The marketplace is full of excellent *viewers* — file-viewer and reviewr
 are genuinely better than us at reading a diff today, and reviewr's send-comments-to-the-agent loop
-is the one feature we most want and do not have. But every one of them is read-only, and **not one
-of the 417 plugins ships language intelligence.** Nobody else here is an editor that can tell you an
-identifier does not exist without you running a build, and nobody else runs your typechecker, your
-tests, your debugger and a picture of your app from the same keymap.
+is the one feature we most want and do not have. Roughly **eight** plugins now implement that loop
+independently, which makes it the most-replicated idea in the ecosystem and our most conspicuous
+absence.
+
+But every one of them is read-only, and none implements language intelligence. Nobody else here is
+an editor that can tell you an identifier does not exist without you running a build, and nobody
+else runs your typechecker, your tests, your debugger and a picture of your app from the same
+keymap.
+
+Read the split this way: **the editor-primitive half of the space is uncontested and we own it; the
+agent-workflow half is where the ecosystem has converged and where every one of our real gaps
+sits.**
 
 Where a neighbour is clearly better, the honest answer is to use it: reviewr for a careful diff
 read, herdr-browser when you need to *click* the page rather than look at it. They compose — that is
@@ -599,6 +615,13 @@ written yet. Tracked in [UPSTREAM.md](UPSTREAM.md) as owed upstream too.
 **Autocomplete.** The LSP client does diagnostics, hover and go-to-definition; `textDocument/
 completion` and a completion popup are not written. This is the largest remaining "tiny VS Code"
 absence, and the transport it needs already exists.
+
+**Runtime diagnostics.** The Problems panel is *static* analysis only — `tsc`, `eslint`, `ruff`.
+Errors thrown by the app while it actually runs never reach it, even though the Preview panel is
+already pointed at that running app. [herdr-flutter](https://github.com/ablause/herdr-flutter)
+surfaces live `Flutter.Error` events with `file:line`, and
+[StructuPath/herdr-browser](https://github.com/StructuPath/herdr-browser) surfaces console and page
+errors. The natural version here is Preview feeding Problems; it is not written.
 
 **Cross-file replace with preview.** The editor now has replace, regex and a match-preview API;
 driving it across a whole repo from the Search panel is not wired up.
