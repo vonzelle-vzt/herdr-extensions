@@ -141,14 +141,57 @@ trying to survive an SSH drop. Orca is solving a genuinely different problem, an
 desktop, and solving it well; its 33k stars are earned. herdr alone is deliberately not an IDE.
 
 What is actually unclaimed ground is the intersection: **an IDE that lives in a terminal, keeps real
-language intelligence, and comes back after your connection dies.** herdr's marketplace has 150+
-entries and none ships language intelligence. That gap is the whole reason this exists.
+language intelligence, and comes back after your connection dies.** herdr's marketplace is now
+**417 plugins** and not one of them ships language intelligence. That gap is the whole reason this
+exists — and it is the one gap a competitor cannot close with a shell wrapper, because it needs a
+live process that has parsed your project.
 
 Ideas were taken freely from all three — the panel layout is VS Code's, the agent-pane model is
 herdr's, and the ambition of an IDE built around agents is Orca's. **No code was.** There is no
 Monaco, no Electron, and no Orca-derived source anywhere in this repo or in herdr-edit; the only
 inherited code is spice-edit's, which is MIT and credited in
 [herdr-edit](https://github.com/vonzelle-vzt/herdr-edit).
+
+### Against the other plugins in herdr's own marketplace
+
+The neighbours above are different products. These are direct: the plugins that also try to make
+herdr feel like an IDE. Star counts and features checked 2026-07-30.
+
+| | [file-viewer](https://github.com/smarzban/herdr-file-viewer) 290★ | [reviewr](https://github.com/persiyanov/herdr-reviewr) 283★ | [sidebar](https://github.com/alexarthurs/herdr-sidebar) | [browser](https://github.com/ogulcancelik/herdr-browser) 190★ | **this + herdr-edit** |
+| --- | --- | --- | --- | --- | --- |
+| File tree | ✓ | ✓ | ✓ | — | ✓ |
+| Syntax highlighting | ✓ via `bat` | ✓ | ✓ | — | ✓ Chroma, in-process |
+| **Edit files** | ✗ read-only | ✗ read-only | ✗ read-only | — | ✓ **a real editor** |
+| **LSP / diagnostics** | ✗ | ✗ | ✗ | ✗ | ✓ **9 server families** |
+| **Hover · go-to-definition** | ✗ | ✗ | ✗ | ✗ | ✓ |
+| Find in file | ✗ | ✓ | ✗ | — | ✓ |
+| **Find and replace** | ✗ | ✗ | ✗ | — | ✓ regex · whole-word · case |
+| Repo search | fuzzy names | ✓ names + grep | ✗ | — | ✓ ripgrep panel |
+| Git status in the tree | ✓ | ✓ | ✓ | — | ✓ |
+| Diff view | ✓ auto per file | ✓ + line comments | ✓ | — | ⏳ gutter marks + hunk preview only |
+| Stage / commit | ✗ | ✗ | ✓ + AI messages | — | ✓ via lazygit |
+| **Comment on a diff → send to the agent** | ✗ | ✓ | ✗ | — | ⏳ **planned** |
+| PR view | ✗ | ✓ | ✗ | — | ✗ (other plugins do this well) |
+| **Typecheck / lint problems** | ✗ | ✗ | ✗ | ✗ | ✓ tsc · eslint · ruff |
+| **Run tests** | ✗ | ✗ | ✗ | ✗ | ✓ vitest · jest · pytest |
+| **Debug configs** | ✗ | ✗ | ✗ | ✗ | ✓ reads `launch.json` |
+| **Live preview of your app** | ✗ | ✗ | ✗ | ✓ full Chromium/CDP | ✓ screenshot, auto-refresh |
+| Markdown preview | ✓ | ✓ | ✗ | — | ✓ |
+| **Paste a screenshot to the agent** | ✗ | ✗ | ✗ | ✗ | ✓ |
+| Installs its own dependencies | ✗ | ✗ | offers a font | — | ✓ editor, lazygit, font, prettier |
+| Checks your keybindings for clashes | ✗ | ✗ | ✗ | ✗ | ✓ against herdr's 39, at runtime |
+
+**What that table says.** The marketplace is full of excellent *viewers* — file-viewer and reviewr
+are genuinely better than us at reading a diff today, and reviewr's send-comments-to-the-agent loop
+is the one feature we most want and do not have. But every one of them is read-only, and **not one
+of the 417 plugins ships language intelligence.** Nobody else here is an editor that can tell you an
+identifier does not exist without you running a build, and nobody else runs your typechecker, your
+tests, your debugger and a picture of your app from the same keymap.
+
+Where a neighbour is clearly better, the honest answer is to use it: reviewr for a careful diff
+read, herdr-browser when you need to *click* the page rather than look at it. They compose — that is
+what a pane multiplexer is for. The two gaps we intend to close ourselves are marked ⏳ above, and
+they are tracked in [What it doesn't do](#what-it-doesnt-do).
 
 ## Why one command matters
 
@@ -486,10 +529,16 @@ of it, including invocation through a symlink.
 
 Panels prefer [`herdr-edit`](https://github.com/vonzelle-vzt/herdr-edit), a fork of
 [SpiceEdit](https://github.com/cloudmanic/spice-edit) adding the things a VS Code user notices
-missing: LSP diagnostics, a file tree that respects `.gitignore`, find *and replace*, auto-closing
-pairs, a start page instead of "No file open", and a layout that degrades in a narrow pane rather
-than refusing to draw. Upstream `spiceedit` is still supported and is the documented fallback —
-everything except diagnostics behaves the same, and the panels degrade gracefully.
+missing: LSP diagnostics, hover and go-to-definition, a file tree that respects `.gitignore`, find
+*and replace* (regex, whole-word and case toggles, replace-all as one undo step), auto-closing
+pairs, word wrap, persistent undo, a start page instead of "No file open", and a layout that
+degrades in a narrow pane rather than refusing to draw. Upstream `spiceedit` is still supported and
+is the documented fallback — everything except diagnostics behaves the same, and the panels degrade
+gracefully.
+
+The editor is the reason this stack is not just a set of shell wrappers. herdr's marketplace has
+several good file *viewers*; none of them is an editor with language intelligence, so none can tell
+you an identifier does not exist without you running a build.
 
 ### Icons
 
@@ -528,12 +577,38 @@ supports neither OSC 52 clipboard nor any image protocol.
 
 ## What it doesn't do
 
+These are the honest gaps, kept current against the marketplace rather than against our own
+roadmap. Where another plugin already does one of them well, it is named.
+
+**Review an agent's diff and send comments back.** The thing herdr is actually for, and the biggest
+hole here. [reviewr](https://github.com/persiyanov/herdr-reviewr) does it properly today — select
+lines, write notes, one key returns them to the agent. Planned; until then, run reviewr beside this.
+
+**A diff view inside the editor.** herdr-edit shows gutter change markers and a hunk preview, but
+not a real diff. [file-viewer](https://github.com/smarzban/herdr-file-viewer) picks the right view
+per file automatically and can flip the baseline between merge-base and `HEAD`. Planned.
+
 **Inline git blame** — author and commit shown on the cursor's line, GitLens-style. The Blame panel
 gives you file history and `git log --follow`; the inline version is editor-side work and is not
-written yet.
+written yet. Tracked in [UPSTREAM.md](UPSTREAM.md) as owed upstream too.
 
-**Cross-file replace with preview.** The editor has replace, regex and a match-preview API; driving
-it across a whole repo from the Search panel is not wired up.
+**A command palette.** There is a fuzzy *file* finder (`Esc p` in the editor), but no fuzzy
+*command* search — the one piece of VS Code muscle memory that is still missing.
+[herdr-command-palette](https://github.com/JanTvrdik/herdr-command-palette) covers plugin actions.
+
+**Autocomplete.** The LSP client does diagnostics, hover and go-to-definition; `textDocument/
+completion` and a completion popup are not written. This is the largest remaining "tiny VS Code"
+absence, and the transport it needs already exists.
+
+**Cross-file replace with preview.** The editor now has replace, regex and a match-preview API;
+driving it across a whole repo from the Search panel is not wired up.
+
+**A PR view, notifications, mobile access, session save/restore, token dashboards.** All well served
+by other plugins — the marketplace has 18 review tools, 22 notifiers and 17 remote/mobile options.
+This package is the IDE layer and composes with them rather than reimplementing them.
+
+Permanently out of scope: a plugin system, a TOML library, a DAP client, Windows, and patching
+herdr. See [SPEC.md](SPEC.md).
 
 Anything else that needs to live *inside* the editor lives in
 [herdr-edit](https://github.com/vonzelle-vzt/herdr-edit) rather than here — see
