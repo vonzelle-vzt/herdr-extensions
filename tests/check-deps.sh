@@ -134,6 +134,48 @@ else
   no "25d: REPO must use realpath(__file__), not abspath — symlinked installs break otherwise"
 fi
 
+# --- 25e: the formula must ship the version the package claims -----------------------------------
+# Unlike the fork's formula, which GoReleaser regenerates on every release, this one is maintained by
+# hand -- so cutting a release without touching it leaves brew installing the PREVIOUS version while
+# every other version string says otherwise. Caught by hand once at 0.9.1 (package) vs v0.9.0
+# (formula); a hand-maintained formula is exactly the thing that drifts.
+if /usr/bin/python3 - "$ROOT" <<'PYEOF'
+import os, re, sys
+
+root = sys.argv[1]
+man = open(os.path.join(root, "plugin", "herdr-plugin.toml")).read()
+cli = open(os.path.join(root, "bin", "herdr-extensions")).read()
+mv = re.search(r'^version = "([^"]+)"', man, re.M)
+cv = re.search(r'^VERSION = "([^"]+)"', cli, re.M)
+if not mv or not cv:
+    print("could not read the package version from the manifest or the CLI")
+    sys.exit(1)
+if mv.group(1) != cv.group(1):
+    print("manifest says %s but the CLI says %s" % (mv.group(1), cv.group(1)))
+    sys.exit(1)
+
+formula = os.path.join(root, "Formula", "herdr-extensions.rb")
+if not os.path.isfile(formula):
+    # The README documents `brew tap` + `brew install`; without a formula that path cannot work.
+    print("no Formula/herdr-extensions.rb, yet the README documents brew install")
+    sys.exit(1)
+body = open(formula).read()
+fu = re.search(r'/v([0-9][^/]*)\.tar\.gz', body)
+if not fu:
+    print("could not find a versioned tarball URL in the formula")
+    sys.exit(1)
+if fu.group(1) != mv.group(1):
+    print("package is %s but the formula installs v%s -- brew would serve the wrong version"
+          % (mv.group(1), fu.group(1)))
+    sys.exit(1)
+sys.exit(0)
+PYEOF
+then
+  ok "25e: the formula, the manifest and the CLI all name the same version"
+else
+  no "25e: version drift — brew would install something other than this package"
+fi
+
 echo
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
