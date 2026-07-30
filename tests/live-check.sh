@@ -10,6 +10,7 @@
 # Exits non-zero if any oracle fails, so it is usable as a release gate.
 set -uo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HERDR="$(command -v herdr)"
 PY=/usr/bin/python3
 TMP="${TMPDIR:-/tmp}/herdr-extensions-livecheck.$$"
@@ -155,6 +156,52 @@ print(next((p['pane_id'] for p in ps if p['workspace_id']==ws and not (p.get('la
   else
     no "git panel did not open"
   fi
+fi
+
+# --- offline oracles (no live server needed) --------------------------------------------------
+# These are the checks that would have caught the two v0.1.0 regressions, so they must run even
+# when the server is unreachable (e.g. a protocol mismatch after a brew upgrade).
+
+# ORACLE 13: bash 3.2 -- /bin/bash on macOS is still 3.2.57 and mis-parses an apostrophe inside a
+# heredoc nested in $( ). The failure is silent: herdr just sees the action produce nothing.
+if /bin/bash -n "$ROOT/plugin/open-panel.sh" 2>/dev/null; then
+  ok "ORACLE 13a: /bin/bash ($(/bin/bash --version | head -1 | grep -o '[0-9]\+\.[0-9]\+')) parses open-panel.sh"
+else
+  no "ORACLE 13a: open-panel.sh does not parse under bash 3.2"
+fi
+if /usr/bin/python3 - "$ROOT/plugin/open-panel.sh" <<'PYEOF'
+import sys
+inside = False
+bad = []
+for i, l in enumerate(open(sys.argv[1]).read().splitlines(), 1):
+    if "<<" + chr(39) + "EOF" + chr(39) in l:
+        inside = True
+        continue
+    if l.strip() == "EOF":
+        inside = False
+        continue
+    if inside and chr(39) in l:
+        bad.append(i)
+sys.exit(1 if bad else 0)
+PYEOF
+then
+  ok "ORACLE 13b: no apostrophes inside any heredoc"
+else
+  no "ORACLE 13b: an apostrophe inside a heredoc will break bash 3.2"
+fi
+
+# ORACLE 11: our keybindings must not shadow any herdr built-in.
+if "$ROOT/bin/herdr-extensions" doctor 2>/dev/null | grep -q "collide with none of"; then
+  ok "ORACLE 11: no keybinding collisions"
+else
+  no "ORACLE 11: keybinding collision detected (or the check could not run)"
+fi
+
+# ORACLE 14: panel sizing -- deterministic, against a fixture, so it needs no live server.
+if /usr/bin/python3 "$ROOT/tests/check-sizing.py" >/dev/null 2>&1; then
+  ok "ORACLE 14: panel sizing correct, clamped, and idempotent"
+else
+  no "ORACLE 14: panel sizing wrong -- run tests/check-sizing.py"
 fi
 
 # --- cleanup ----------------------------------------------------------------------------------

@@ -28,7 +28,7 @@ does them right, is idempotent, and is fully reversible.
 - **Plugin** `herdr-extensions` linked into herdr, providing three panes and three actions:
   editor split, editor tab, and a lazygit panel.
 - **Keybindings**, injected between managed markers in `~/.config/herdr/config.toml`:
-  `prefix+e` editor panel (left), `prefix+shift+e` editor tab, `prefix+g` git panel.
+  `prefix+shift+e` editor panel (left), `prefix+shift+o` editor tab, `prefix+shift+s` git panel.
 - **SpiceEdit configs** in `~/.config/spiceedit/`: `config.json` (icons), `format-defaults.json`
   (format-on-save via the bundled resolver), `actions.json` (Reveal in Finder / open in editor).
 - **`herdr-fmt`**, the formatter resolver (see below).
@@ -41,6 +41,16 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 `cloudmanic/spice-edit` (MIT), not into this package. Tracked in `UPSTREAM.md`.
 
 ## Design decisions (each one is a bug this package prevents)
+
+0. **Never bind a key herdr already owns.** A `[[keys.command]]` entry silently OVERRIDES a herdr
+   built-in — no warning, no log line, the built-in simply stops responding, and the user blames
+   herdr rather than the extension. v0.1.0 shipped `prefix+e`, `prefix+g` and `prefix+r` and so
+   destroyed `edit_scrollback`, `goto` (the fuzzy space/tab/agent picker added in 0.6.3) and
+   `resize_mode` on every machine that installed it. herdr reserves **39** prefix bindings on
+   0.7.5. The reserved set is therefore re-derived from `herdr --default-config` **at runtime**,
+   never hardcoded — herdr keeps adding actions, and a frozen table goes stale exactly when it
+   matters. `install` refuses on a conflict (`--force` overrides); `doctor --keymap` audits the
+   user's own bindings too, since theirs can break herdr just as easily as ours.
 
 1. **Absolute paths in every pane command.** The herdr server is started by launchd, so it execs
    plugin panes with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`. Neither `/opt/homebrew/bin` nor
@@ -79,6 +89,23 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 7. **SpiceEdit JSON uses `disallowUnknownFields`.** A single `"_comment"` key silently rejects the
    *entire* file. Config templates carry no comment keys; documentation lives here instead.
 
+8a. **No apostrophe may appear inside a heredoc in `open-panel.sh`.** The launcher runs under
+   `/bin/bash`, which on macOS is still **bash 3.2.57**, and 3.2 mis-parses a lone `'` inside a
+   heredoc nested in `$( )`. The whole script then fails to parse — silently, because herdr only
+   sees the action produce nothing. A prose comment containing "the editor's minimum" was enough
+   to break it. `tests/live-check.sh` greps for this.
+
+8b. **Panels must be sized explicitly.** `herdr plugin pane open` has **no `--ratio`** (only
+   `pane split` and `pane move` do), so every plugin panel opens at a hard 50/50 — half the screen
+   for a file tree. Worse, SpiceEdit refuses to draw below **50 columns** and its tree is a fixed
+   **30**, so a panel is only comfortable in a narrow band and hits "Window too small - please
+   resize" just outside it. So the launcher takes a target **column count** and drives the split
+   with `pane resize`, whose `--amount` is a *delta on the split ratio* (measured: ratio 0.315,
+   `--direction right --amount 0.05` -> 0.365, exactly reversible). Direction names where the
+   *divider* moves, so the sign of the delta alone picks it. Clamped both ways, and **the floor
+   wins over the cap**: on an 80-column terminal 50 columns is already 63% of the screen, and an
+   oversized panel is merely annoying where an under-minimum one renders nothing at all.
+
 8. **Format-on-save needs a resolver, not a command.** `format.json` takes one argv array per
    extension: no PATH search, no fallback. Under launchd's PATH, plain `prettier` never resolves;
    `./node_modules/.bin/prettier` only works in repos that vendor it. `herdr-fmt` walks **up** from
@@ -110,6 +137,11 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 | 8 | Icons emitted | `pane read` output contains a codepoint in U+E000–U+F8FF |
 | 9 | Formatter resolution | un-vendored repo → global; vendored repo → that repo's binary; unsupported ext → exit 0 |
 | 10 | `doctor` catches breakage | Rename the spiceedit binary; `doctor` exits 1 naming that specific failure |
+| 11 | No keybinding collisions | `doctor` reports 0 conflicts against the runtime-derived reserved set; re-running with the v0.1.0 keymap reports `prefix+e`->`edit_scrollback` and `prefix+g`->`goto` |
+| 12 | Install refuses on a clash | Add `key = "prefix+shift+e"` to the user's own config; `install` exits 1 and changes nothing; `--force` proceeds |
+| 13 | bash 3.2 parses the launcher | `/bin/bash -n plugin/open-panel.sh` exits 0, and no heredoc line contains an apostrophe |
+| 14 | Panel sizing is correct and idempotent | Against `tests/fixtures/edges-2pane.json`: 88 -> 88 cols; second-child pane inverts to `1-want`; every screen width from 64 to 200 yields >= 50 columns; asking for the current size emits no resize |
+| 15 | Terminal font diagnosed by name | Under Apple Terminal, `doctor` names the profile and its font and says glyphs will not render; under Ghostty with a Nerd Font it passes |
 
 ## Distribution
 

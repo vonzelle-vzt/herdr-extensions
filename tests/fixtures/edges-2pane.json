@@ -1,0 +1,6 @@
+{"id":"cli:pane:edges","result":{"edges":{"layout":{"area":{"height":69,"width":200,"x":36,"y":1},
+"panes":[{"pane_id":"edit","rect":{"height":69,"width":63,"x":36,"y":1}},
+         {"pane_id":"agent","rect":{"height":69,"width":137,"x":99,"y":1}}],
+"splits":[{"direction":"right","id":"split_0_root","ratio":0.315,
+           "rect":{"height":69,"width":200,"x":36,"y":1}}]},
+"pane_id":"edit"},"type":"pane_edges"}}

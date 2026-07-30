@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 HOME = os.path.expanduser("~")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,11 +38,24 @@ BIN_DIR = os.path.join(HOME, ".local", "bin")
 BEGIN = "# >>> herdr-extensions (managed) >>>"
 END = "# <<< herdr-extensions (managed) <<<"
 
-# Panels: (keybinding, action id, human description)
+# Keybindings we inject: (key, action id, human description).
+#
+# 🔴 EVERY KEY HERE MUST BE CHECKED AGAINST HERDR'S OWN DEFAULTS FIRST. `herdr --default-config`
+# reserves 39 prefix bindings on 0.7.5, and a [[keys.command]] entry silently WINS over the built-in — no
+# warning, no log line, the built-in simply stops working. v0.1.0 of this package shipped three
+# such collisions and destroyed `edit_scrollback` (prefix+e), `goto` (prefix+g — the fuzzy
+# space/tab/agent picker) and `resize_mode` (prefix+r) on every machine that installed it.
+#
+# So the mapping below is chosen for VS Code muscle memory *within* the keys herdr leaves free,
+# and `doctor --keymap` re-derives the reserved set from the installed binary at runtime rather
+# than trusting this comment to stay true across herdr releases.
+#
+# Deliberately few direct keys: everything else hangs off one command palette, which is what VS
+# Code itself does, and it keeps us from eating a dozen of the user's bindings.
 KEYS = [
-    ("prefix+e", "open-editor", "editor panel, left of the current pane"),
-    ("prefix+shift+e", "open-editor-tab", "editor full-width in its own tab"),
-    ("prefix+g", "open-git", "lazygit source-control panel, below the current pane"),
+    ("prefix+shift+e", "open-editor", "editor panel, left of the current pane (VS Code shift+cmd+E)"),
+    ("prefix+shift+o", "open-editor-tab", "editor full-width in its own tab"),
+    ("prefix+shift+s", "open-git", "lazygit source-control panel, below the current pane"),
 ]
 
 # ---------------------------------------------------------------------------------------------
@@ -81,16 +94,21 @@ def die(m):
     raise SystemExit(1)
 
 
-def run(cmd, check=False):
-    """Run a command, returning (rc, stdout+stderr). Never raises unless check."""
+def run(cmd, check=False, capture_bytes=False):
+    """Run a command, returning (rc, stdout+stderr). Never raises unless check.
+
+    capture_bytes returns raw bytes and keeps stderr OFF stdout — required when the output is a
+    binary plist (`defaults export`), where decoding to text or interleaving stderr corrupts it.
+    """
     try:
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        out = p.stdout.decode("utf-8", "replace")
+        p = subprocess.run(cmd, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL if capture_bytes else subprocess.STDOUT)
+        out = p.stdout if capture_bytes else p.stdout.decode("utf-8", "replace")
         if check and p.returncode != 0:
             die("command failed: %s\n%s" % (" ".join(cmd), out))
         return p.returncode, out
     except FileNotFoundError:
-        return 127, ""
+        return 127, (b"" if capture_bytes else "")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -133,6 +151,103 @@ def herdr_version():
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+# ---------------------------------------------------------------------------------------------
+# keymap collision detection
+#
+# A [[keys.command]] entry silently OVERRIDES a herdr built-in: no warning, no log line, the
+# built-in just stops responding. That is the worst possible failure mode for an extension —
+# the user blames herdr, not us. So we refuse to install over a conflict.
+#
+# The reserved set is re-derived from the INSTALLED BINARY on every run rather than hardcoded,
+# because herdr keeps adding actions (0.6.3 introduced `goto = "prefix+g"`), and a table frozen
+# into this file would go stale precisely when it matters most.
+# ---------------------------------------------------------------------------------------------
+
+
+def _expand(key):
+    """`prefix+1..9` is one config entry but nine bindings. Expand so ranges can collide too."""
+    m = re.match(r"^(.*?)(\d+)\.\.(\d+)$", key)
+    if not m:
+        return [key]
+    head, lo, hi = m.group(1), int(m.group(2)), int(m.group(3))
+    return ["%s%d" % (head, i) for i in range(lo, hi + 1)]
+
+
+def reserved_keys():
+    """{key: builtin_action} for every prefix binding herdr reserves by default.
+
+    Returns {} when herdr cannot be run. Callers MUST treat empty as "unknown", never as
+    "nothing is reserved" — silently proceeding on an unanswerable question is how the original
+    collisions shipped.
+    """
+    h = herdr_bin()
+    if not h:
+        return {}
+    rc, out = run([h, "--default-config"])
+    if rc != 0 or not out:
+        return {}
+    res = {}
+    for line in out.splitlines():
+        s = line.strip().lstrip("#").strip()
+        m = re.match(r'^([a-z_]+)\s*=\s*"(prefix\+[^"]+)"', s)
+        if not m:
+            continue
+        action, key = m.group(1), m.group(2)
+        # `prefix = "ctrl+b"` is the prefix itself; `key = "prefix+alt+g"` is the commented
+        # [[keys.command]] EXAMPLE, not a reserved built-in. Neither is a binding we can break.
+        if action in ("prefix", "key"):
+            continue
+        for k in _expand(key):
+            res[k] = action
+    return res
+
+
+def strip_managed(text):
+    """The user's config minus our own block — so we never count our bindings as conflicts."""
+    return re.compile(re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n?", re.S).sub("", text)
+
+
+def keymap_conflicts(keys=None):
+    """[(key, description_of_what_it_would_break)] for the bindings we intend to install.
+
+    Accounts for the user having REMAPPED a built-in: if they set `goto = "prefix+z"` in [keys],
+    then prefix+g is genuinely free and prefix+z is the one that is taken.
+    """
+    taken = reserved_keys()
+    if not taken:
+        return None                      # unknown, not clear — the caller must say so
+    labels = {k: "herdr built-in `%s`" % a for k, a in taken.items()}
+
+    text = strip_managed(open(HERDR_CFG).read()) if os.path.isfile(HERDR_CFG) else ""
+
+    # [keys] overrides move a built-in off its default key.
+    in_keys = False
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("[") and not s.startswith("[["):
+            in_keys = (s == "[keys]")
+            continue
+        if not in_keys or s.startswith("#"):
+            continue
+        m = re.match(r'^([a-z_]+)\s*=\s*"([^"]*)"', s)
+        if not m:
+            continue
+        action, key = m.group(1), m.group(2)
+        for old_key, old_action in list(labels.items()):
+            if old_action == "herdr built-in `%s`" % action:
+                del labels[old_key]
+        for k in _expand(key):
+            if k:
+                labels[k] = "herdr built-in `%s` (you remapped it here)" % action
+
+    # The user's own custom commands outside our block.
+    for m in re.finditer(r'^\s*key\s*=\s*"([^"]+)"', text, re.M):
+        for k in _expand(m.group(1)):
+            labels[k] = "your own [[keys.command]] binding"
+
+    return [(k, labels[k]) for k, _a, _d in (keys or KEYS) if k in labels]
+
+
 def nerd_font_installed():
     for d in (os.path.join(HOME, "Library", "Fonts"), "/Library/Fonts",
               os.path.join(HOME, ".local", "share", "fonts"), "/usr/share/fonts"):
@@ -143,6 +258,64 @@ def nerd_font_installed():
                 if "nerd" in f.lower() and f.lower().endswith((".ttf", ".otf")):
                     return os.path.join(root, f)
     return None
+
+
+def macos_terminal_font():
+    """The font Apple Terminal actually renders with, or None.
+
+    Terminal stores it as an NSKeyedArchiver blob per profile, so it cannot be read with a plain
+    `defaults read`. This matters because it is the single most common cause of "my file tree is
+    full of question marks": SpiceEdit detects a Nerd Font on DISK and emits U+F07B, but the
+    terminal renders tofu because its own profile font has no such glyph. Checking the installed
+    font alone gives a false all-clear.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        import plistlib
+        rc, out = run(["/usr/bin/defaults", "export", "com.apple.Terminal", "-"], capture_bytes=True)
+        if rc != 0 or not out:
+            return None
+        d = plistlib.loads(out)
+        prof = d.get("Startup Window Settings") or d.get("Default Window Settings")
+        cfg = (d.get("Window Settings") or {}).get(prof) or {}
+        blob = cfg.get("Font")
+        if not isinstance(blob, bytes):
+            return None
+        objs = plistlib.loads(blob).get("$objects") or []
+        names = [o for o in objs if isinstance(o, str) and o not in ("$null",)]
+        return (prof, names[0]) if names else None
+    except Exception:
+        return None
+
+
+def terminal_report():
+    """(is_ok, message) describing whether the RUNNING terminal can render Nerd Font glyphs."""
+    prog = (os.environ.get("TERM_PROGRAM") or "").lower()
+    if "ghostty" in prog or os.environ.get("GHOSTTY_RESOURCES_DIR"):
+        cfg = os.path.join(HOME, ".config", "ghostty", "config")
+        fam = ""
+        if os.path.isfile(cfg):
+            m = re.search(r'^\s*font-family\s*=\s*"?([^"\n]+)"?', open(cfg).read(), re.M)
+            fam = (m.group(1).strip() if m else "")
+        if fam and "nerd" in fam.lower():
+            return True, "terminal is Ghostty with font-family = %s — glyphs will render" % fam
+        return False, ("terminal is Ghostty but font-family is %s — set it to a Nerd Font in %s"
+                       % (fam or "unset", cfg))
+
+    info = macos_terminal_font()
+    if info:
+        prof, font = info
+        if "nerd" in font.lower():
+            return True, "Apple Terminal profile %r uses %s — glyphs will render" % (prof, font)
+        return False, ("Apple Terminal profile %r uses %s, which has NO Nerd Font glyphs — the "
+                       "file tree will show boxes/question marks. Either set that profile's font "
+                       "to a Nerd Font (Settings > Profiles > Text > Font), or switch to a "
+                       "terminal like Ghostty. Apple Terminal also supports no image protocol "
+                       "and no OSC 52 clipboard, so switching gains more than icons."
+                       % (prof, font))
+    return False, ("could not identify the running terminal — SpiceEdit cannot detect what font "
+                   "your terminal uses, so if the tree shows boxes, set its font to a Nerd Font")
 
 
 def server_error(out):
@@ -402,6 +575,24 @@ def cmd_install(args):
     if problem and not args.dry_run:
         die("%s\n       Nothing was changed. Re-run this after the restart." % problem)
 
+    # Refuse rather than silently steal a key. A [[keys.command]] entry overrides a herdr built-in
+    # with no warning anywhere, so a collision looks to the user like herdr itself broke. Checked
+    # BEFORE anything is written, so a refusal leaves the machine untouched.
+    head("Keymap")
+    conflicts = keymap_conflicts()
+    if conflicts is None:
+        warn("could not read herdr's default keymap — skipping the collision check")
+    elif conflicts:
+        for key, what in conflicts:
+            bad("%s would override %s" % (key, what))
+        if not args.force:
+            die("Refusing to install: the bindings above are already in use.\n"
+                "       Nothing was changed. Re-run with --force to override them anyway,\n"
+                "       or free the keys first. `herdr-extensions doctor --keymap` explains more.")
+        warn("--force: overriding %d existing binding(s) anyway" % len(conflicts))
+    else:
+        ok("no keybinding collisions (%d herdr built-ins checked)" % len(reserved_keys()))
+
     if not args.no_deps:
         head("Dependencies")
         install_deps(args.dry_run)
@@ -475,9 +666,10 @@ def cmd_uninstall(args):
     return 0
 
 
-def cmd_doctor(_args):
+def cmd_doctor(_args=None):
     head("herdr-extensions doctor")
     fails = 0
+    audit_all = getattr(_args, "keymap", False)
 
     v = herdr_version()
     if not herdr_bin():
@@ -565,12 +757,46 @@ def cmd_doctor(_args):
     else:
         warn("no global prettier — only repos vendoring it will format")
 
+    head("Keymap")
+    reserved = reserved_keys()
+    if not reserved:
+        warn("could not read herdr's default keymap — collision check skipped")
+    else:
+        ours = keymap_conflicts() or []
+        if ours:
+            for key, what in ours:
+                bad("%s (ours) overrides %s" % (key, what))
+            fails += len(ours)
+        else:
+            ok("our %d binding(s) collide with none of herdr's %d built-ins"
+               % (len(KEYS), len(reserved)))
+
+        # A [[keys.command]] entry silently wins over a built-in, so the user's OWN bindings can
+        # break herdr just as easily as ours can. Worth reporting even though it is not our doing.
+        text = strip_managed(open(HERDR_CFG).read()) if os.path.isfile(HERDR_CFG) else ""
+        theirs = []
+        for m in re.finditer(r'^\s*key\s*=\s*"([^"]+)"', text, re.M):
+            for k in _expand(m.group(1)):
+                if k in reserved:
+                    theirs.append((k, reserved[k]))
+        if theirs:
+            for key, action in theirs:
+                warn("%s (your own binding) overrides herdr built-in `%s`" % (key, action))
+        elif audit_all:
+            ok("your own bindings collide with nothing either")
+
+        if audit_all:
+            print()
+            act("herdr reserves %d prefix bindings:" % len(reserved))
+            for k in sorted(reserved):
+                print("      %-18s %s" % (k, reserved[k]))
+
     head("Icons")
     font = nerd_font_installed()
     if font:
         ok("Nerd Font present: %s" % os.path.basename(font))
-        warn("SpiceEdit cannot detect what font your TERMINAL uses. If the file tree shows "
-             "boxes/question marks, set your terminal profile font to a Nerd Font.")
+        term = terminal_report()
+        (ok if term[0] else warn)(term[1])
     else:
         warn("no Nerd Font installed — file-type icons will stay off")
 
@@ -591,13 +817,18 @@ def main():
     p.add_argument("--no-deps", action="store_true", help="skip installing dependencies")
     p.add_argument("--projects-root", default=os.path.join(HOME, "github-projects"),
                    help="where the editor opens when you are not inside a git repo")
+    p.add_argument("--force", action="store_true",
+                   help="install even if our keybindings would override herdr built-ins")
     p.set_defaults(fn=cmd_install)
 
     p = sub.add_parser("uninstall", help="remove the plugin and managed keybindings")
     p.add_argument("--purge", action="store_true", help="also remove SpiceEdit configs")
     p.set_defaults(fn=cmd_uninstall)
 
-    sub.add_parser("doctor", help="diagnose the setup").set_defaults(fn=cmd_doctor)
+    p = sub.add_parser("doctor", help="diagnose the setup")
+    p.add_argument("--keymap", action="store_true",
+                   help="audit EVERY binding in your config against herdr's built-ins, not just ours")
+    p.set_defaults(fn=cmd_doctor)
     sub.add_parser("version", help="print version").set_defaults(
         fn=lambda _a: (print("herdr-extensions %s" % VERSION), 0)[1])
 

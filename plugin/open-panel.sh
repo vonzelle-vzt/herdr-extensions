@@ -191,7 +191,11 @@ import json, sys
 # a bare FRACTION is a trap: 0.40 of a 200-col screen is a comfortable 80, but 0.40 of a 120-col
 # laptop is 48 — under the wall, and the panel renders "Window too small — please resize".
 # So the requested size is a COLUMN COUNT (>=1), converted to a ratio against the actual split,
-# then clamped: never below the editor's usable minimum, never more than MAX_FRAC of the screen.
+# then clamped: never below the usable minimum, never more than MAX_FRAC of the screen.
+#
+# NOTE no apostrophes anywhere in this heredoc. bash 3.2 (what /bin/bash still is on macOS, and
+# what launchd PATH resolves) mis-parses a lone quote inside a heredoc nested in $( ), and the
+# whole script then fails to parse — silently, because herdr just sees the action do nothing.
 # A value below 1 is still accepted and taken as a literal fraction, for a vertical panel where
 # columns are the wrong unit.
 MIN_COLS = 56          # minWidth(50) + tab bar/status margin, so the wall is never hit
@@ -214,22 +218,30 @@ try:
     mine = min((s for s in splits if contains(s)),
                key=lambda s: s["rect"]["width"] * s["rect"]["height"], default=None)
     if mine is not None:
+        horiz = mine["direction"] == "right"      # vertical divider, panes side by side
         want = float(target)
-        if want >= 1:                      # column count -> fraction of THIS split's extent
-            span = mine["rect"]["width"] if mine["direction"] == "right" else mine["rect"]["height"]
+        if want >= 1:                      # column count -> fraction of the extent of THIS split
+            span = mine["rect"]["width"] if horiz else mine["rect"]["height"]
             if span <= 0:
                 raise ValueError("degenerate split")
-            lo = min(MIN_COLS / span, MAX_FRAC)   # a tiny screen still gets the biggest legal panel
-            want = max(lo, min(want / span, MAX_FRAC))
-        delta = want - float(mine["ratio"])
-        # ratio is measured from the split's FIRST child (its top-left corner coincides with the
-        # split's). If we are the second child, growing us means lowering the ratio — sign flips.
+            # Cap first, then floor — and the FLOOR WINS. On a narrow terminal the two limits
+            # genuinely conflict (50 cols of a 80-col screen is already 63%, over MAX_FRAC), and
+            # an oversized panel is merely annoying while an under-minimum one renders nothing
+            # but "Window too small". Prefer usable. Capped at 0.9 so the agent never vanishes.
+            want = min(want / span, MAX_FRAC)
+            want = max(want, min(MIN_COLS / span, 0.9))
+
+        # `ratio` is the share belonging to the FIRST child, so a second-child panel that wants
+        # `want` needs the ratio set to 1-want. Getting this backwards sizes the wrong pane.
         first = me["x"] == mine["rect"]["x"] and me["y"] == mine["rect"]["y"]
-        if not first:
-            delta = -delta
+        delta = (want if first else 1.0 - want) - float(mine["ratio"])
+
+        # Direction names where the DIVIDER moves, not which pane grows — verified live: on a
+        # first-child pane, `--direction right --amount 0.05` took ratio 0.315 -> 0.365. So the
+        # sign of the ratio delta alone picks the direction, regardless of which child we are.
         if abs(delta) >= 0.01:
-            grow, shrink = ("right", "left") if mine["direction"] == "right" else ("down", "up")
-            print("%s %.4f" % (grow if delta > 0 else shrink, abs(delta)))
+            up, down = ("right", "left") if horiz else ("down", "up")
+            print("%s %.4f" % (up if delta > 0 else down, abs(delta)))
 except Exception:
     pass
 EOF
