@@ -55,6 +55,56 @@ That is fixed, and it will not happen again: the reserved set is re-derived from
 `herdr --default-config` **at runtime** rather than hardcoded, `install` refuses on a conflict, and
 `doctor --keymap` audits your own bindings too — they can break herdr just as easily as ours can.
 
+## The panels
+
+Each is a herdr pane. They follow the file you have open, via a small snapshot the editor publishes
+to `$XDG_STATE_HOME/spiceedit/active.json` — and each degrades to the repo root, saying so, when
+that is absent.
+
+| Panel | What it runs |
+| --- | --- |
+| **Problems** | `tsc --noEmit`, `eslint --format json`, `ruff check` — whichever the repo has. Resolves them from `node_modules/.bin` first, so the repo's pinned version wins. |
+| **Search** | `ripgrep` across the repo root, grouped by file. 5–10× faster than a GUI search, and it respects `.gitignore` for free. |
+| **TODO** | `TODO` / `FIXME` / `HACK` / `XXX` with file and line. |
+| **Blame** | `git log --follow` and `git show --stat` for the file you are looking at. |
+| **Debug** | Parses the repo's `.vscode/launch.json` — comments and trailing commas included, because it is JSONC — lists the configurations, and hands off to an installed adapter (`koan-debugger`, `debugger-cli`, `dlv`, `lldb-dap`, `tdb`). |
+| **Markdown** | `glow -s dark` on the active file. |
+| **Tests** | Detects vitest / jest / pytest from `package.json` or `pyproject.toml`. |
+| **Git** | `lazygit`. Interactive staging alone is worth the panel. |
+
+Every command they run is resolved to an **absolute path**, because the herdr server runs under
+launchd with `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and a bare binary name fails to spawn with no
+useful error. Worth knowing: on many machines `rg` is a *shell function*, so anything that `execve`s
+it fails even though `rg` works fine when you type it.
+
+## Troubleshooting
+
+Run `herdr-extensions doctor` first — it checks every moving part and names the specific failure.
+
+**The file tree is full of `?` or empty boxes.** Your terminal's font has no Nerd Font glyphs. The
+editor detects fonts on *disk*; it cannot know what your terminal renders with. On macOS `doctor`
+decodes your Terminal.app profile and tells you which font it found. Either point that profile at a
+Nerd Font, or use a terminal like Ghostty — which also gains you inline images and OSC 52 clipboard,
+neither of which Apple Terminal supports at all.
+
+**A herdr keybinding stopped working.** Run `herdr-extensions doctor --keymap`. A `[[keys.command]]`
+entry silently overrides a herdr built-in, and herdr gets the blame. The audit covers your own
+bindings too, not just ours.
+
+**The panel is too big, or says "Window too small — please resize".** These are the same problem.
+`herdr plugin pane open` has no `--ratio`, so plugin panels open at a hard 50/50, while the editor
+has a minimum width below which it refuses to draw. Panels are sized in columns here, clamped so
+neither end is reachable. If you are on upstream `spiceedit`, install
+[`herdr-edit`](https://github.com/vonzelle-vzt/herdr-edit) — its layout degrades instead of refusing.
+
+**No diagnostics.** They need a language server *and* `herdr-edit`. Upstream `spiceedit` has no LSP
+client. `doctor` reports which editor it found.
+
+**Every `herdr` command started failing after a `brew install`.** Homebrew may have upgraded herdr
+underneath the running server, leaving the CLI a protocol version ahead of it. Check `herdr status`
+for `compatible:`. The fix is a server restart — but that exits every pane process, so set
+`[session] resume_agents_on_restore = true` **first** or you discard every agent conversation.
+
 ## What it actually does
 
 herdr has a plugin system but no editor. [SpiceEdit](https://github.com/cloudmanic/spice-edit) is a
@@ -93,7 +143,7 @@ Font, `prettier` — or run it with `--no-deps` to manage those yourself.
 
 ### The editor
 
-Panels prefer [`spiceedit-vzt`](https://github.com/vonzelle-vzt/spice-edit-vzt), a fork of
+Panels prefer [`herdr-edit`](https://github.com/vonzelle-vzt/herdr-edit), a fork of
 [SpiceEdit](https://github.com/cloudmanic/spice-edit) adding the things a VS Code user notices
 missing: LSP diagnostics, a file tree that respects `.gitignore`, find *and replace*, auto-closing
 pairs, a start page instead of "No file open", and a layout that degrades in a narrow pane rather
@@ -135,17 +185,29 @@ supports neither OSC 52 clipboard nor any image protocol.
 
 ## What it doesn't do
 
-Inline git blame, LSP/diagnostics, a file-history panel, and hiding git-ignored directories from the
-tree all require changes *inside* SpiceEdit, which has no extension API. Those belong upstream — see
-[UPSTREAM.md](UPSTREAM.md).
+**Inline git blame** — author and commit shown on the cursor's line, GitLens-style. The Blame panel
+gives you file history and `git log --follow`; the inline version is editor-side work and is not
+written yet.
+
+**Cross-file replace with preview.** The editor has replace, regex and a match-preview API; driving
+it across a whole repo from the Search panel is not wired up.
+
+Anything else that needs to live *inside* the editor lives in
+[herdr-edit](https://github.com/vonzelle-vzt/herdr-edit) rather than here — see
+[UPSTREAM.md](UPSTREAM.md) for what moved and what is still owed upstream.
 
 ## Development
 
 ```bash
 ./bin/herdr-extensions doctor        # read-only, safe anywhere
 ./bin/herdr-extensions install --dry-run
-./tests/live-check.sh           # behavioral oracles against a running herdr
+./tests/live-check.sh                # behavioral oracles against a running herdr
+./tests/check-panels.sh              # 25 panel oracles — no server needed
+/usr/bin/python3 tests/check-sizing.py   # panel geometry, against a fixture
 ```
+
+The last two run entirely offline, which matters: they are the checks that catch the two regressions
+that shipped in v0.1.0, and they must work even when the herdr server is unreachable.
 
 `bin/herdr-extensions` is stdlib-only Python targeting **3.9** (what macOS ships), so there is no
 `tomllib` — config edits are marker-delimited text injections, which is also why your comments and

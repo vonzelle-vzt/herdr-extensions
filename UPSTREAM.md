@@ -1,48 +1,54 @@
-# Upstream work (cloudmanic/spice-edit)
+# Editor-side work
 
-SpiceEdit has no extension API — "no runtime, no plugin manager" is an explicit design goal — so the
-remaining VS-Code-shaped gaps cannot live in herdr-extensions. They are patches to send upstream (MIT, Go,
-clean package boundaries in `internal/`).
+SpiceEdit has no extension API — *"no runtime, no plugin manager"* is an explicit design goal — so
+the VS-Code-shaped gaps that need to live **inside** the editor cannot live in this package.
 
-Ordered by value per unit of work.
+**They now live in [`herdr-edit`](https://github.com/vonzelle-vzt/herdr-edit)**, a fork of
+[cloudmanic/spice-edit](https://github.com/cloudmanic/spice-edit). Forking rather than waiting was
+the right call for one reason above all: active-file publishing is the keystone, and *every* panel
+in this package was blocked on it.
 
-## 1. Hide git-ignored paths from the file tree
+## Done, in the fork
 
-**Gap.** The tree lists `.next/`, `node_modules/`, `.vercel/` — noise that VS Code hides by default.
-**Note the asymmetry:** the *fuzzy finder* already honors `.gitignore` (`internal/finder` shells out
-to `git ls-files --cached --others --exclude-standard`); only the tree does not.
-**Where.** `internal/filetree` + the existing `internal/app/gitstatus.go` git plumbing.
-**Shape.** A `{"tree": {"respectGitignore": true}}` key in `~/.config/spiceedit/config.json`
-(`internal/spiceconfig` already exists for exactly this) plus a `git check-ignore --stdin` batch call
-per directory listing. Default on, with an override, matching VS Code's `files.exclude` behavior.
+| Gap | Status |
+| --- | --- |
+| **Publish the active file** | Done. `$XDG_STATE_HOME/spiceedit/active.json`, debounced 150 ms, atomic rename. Every panel here reads it. |
+| **Hide git-ignored paths from the tree** | Done. One `git ls-files --cached --others --exclude-standard` for the whole repo, rebuilt on refresh. Real Next.js checkout: 29 top-level entries → 22. |
+| **Diagnostics / LSP** | Done, and it went further than the "cheap 80%" this file originally proposed. A real LSP client — inline underlines, hover, go-to-definition — verified against real `gopls`. The Problems panel here complements it rather than substituting for it. |
+| **Find and replace** | Done. Upstream had no replace at all, in any form. |
+| **Auto-closing pairs, persistent undo, start page, responsive layout** | Done. Not in the original list; found while using it. |
 
-## 2. Inline git blame — the actual GitLens signature
+| Gap | Still open |
+| --- | --- |
+| **Inline git blame** | Not yet in the fork. `prefix+shift+b` here gives file history and `git log --follow`; the GitLens signature — author and commit on the cursor's line, dim, end-of-line — is still editor-side work. |
 
-**Gap.** No "who last touched this line, when, in which commit".
-**Where.** New `internal/blame` (parse `git blame --porcelain -L`), rendered by `internal/editor` as
-dim end-of-line text on the cursor's line only.
-**Care.** Must be lazy and cancellable — blame on a large file is slow, and the editor's existing
-convention is to never block the UI on git (see the comments in `gitstatus.go`).
+## Going upstream
 
-## 3. Publish the active file so other tools can react
+Three of the fork's changes are small, self-contained, and match upstream's house style, so they
+should be offered upstream rather than carried in a fork forever:
 
-**Gap.** Nothing outside SpiceEdit can know which file is open, so a herdr panel cannot show "history
-for the file I'm looking at". This is the blocker for *every* cross-tool feature, which is why it
-ranks above the flashier ones.
-**Shape.** Write `{"file": "...", "line": N, "root": "..."}` to
-`$XDG_STATE_HOME/spiceedit/active.json` (debounced) on tab switch and cursor move. Tiny, optional,
-and it unlocks file-history / blame / test-runner panels in herdr-extensions without further editor
-changes.
+1. **Active-file publishing** (`internal/state`) — tiny, optional, no IPC, nothing can talk back.
+2. **gitignore-aware tree** (`internal/filetree`) — closes an asymmetry that already existed, since
+   `internal/finder` has always built its index from `git ls-files --exclude-standard`.
+3. **Inline git blame**, once written.
 
-## 4. Diagnostics / LSP
+The rest (LSP, replace, auto-close, persistent undo, the responsive layout) are larger or more
+opinionated and are not obviously things upstream wants.
 
-**Gap.** The largest real difference from VS Code: no IntelliSense, no problems list.
-**Reality check.** A full LSP client is a big change and may not fit the project's "one static
-binary, no runtime" ethos. A cheaper 80% step: a diagnostics *panel* in herdr-extensions that runs
-`tsc --noEmit` / `eslint` and lists results — no editor change needed, though jump-to-line needs #3.
+**Etiquette:** file an issue describing the gap before sending a PR. The repo is MIT, small, one
+author, fast release cadence, auto-release on merge to `main`. Match the house style — the file
+header block, prose comments explaining *why*, and a `_test.go` beside every change.
 
-## Etiquette
+## Which editor this package uses
 
-Open an issue describing the gap before sending a PR; the repo is small and actively maintained
-(one author, fast release cadence, auto-release on merge to `main`). Match the house style: file
-header comment block, prose comments explaining *why*, and a `_test.go` beside every change.
+Panels prefer `herdr-edit` and fall back to upstream `spiceedit`. Preferring rather than requiring
+means neither install breaks the other:
+
+| | `herdr-edit` | upstream `spiceedit` |
+| --- | --- | --- |
+| Editor panel, git panel, format-on-save, icons | ✅ | ✅ |
+| Search / TODO / tests / debug panels | ✅ | ✅ (repo-scoped) |
+| Blame / markdown panels *(need the active file)* | ✅ | ⚠️ falls back to the repo root and says so |
+| Inline diagnostics | ✅ | ❌ |
+
+`herdr-extensions doctor` reports which one it found.

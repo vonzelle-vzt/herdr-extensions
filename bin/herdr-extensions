@@ -163,7 +163,7 @@ def herdr_bin():
 
 # The editor binary, preferring our fork.
 #
-# spiceedit-vzt is cloudmanic/spice-edit plus the things a VS Code user notices missing: LSP
+# herdr-edit is cloudmanic/spice-edit plus the things a VS Code user notices missing: LSP
 # diagnostics, a file tree that respects .gitignore, find AND replace, auto-closing pairs, a start
 # page instead of "No file open", a layout that degrades in a narrow pane instead of refusing to
 # draw, and the active-file publishing every panel in this package reads.
@@ -171,7 +171,7 @@ def herdr_bin():
 # Upstream `spiceedit` still works and is the documented fallback — the panels degrade to the repo
 # root without active.json, and everything except diagnostics behaves the same. Preferring the fork
 # rather than requiring it means neither install is broken by the other.
-EDITOR_CANDIDATES = ("spiceedit-vzt", "spiceedit")
+EDITOR_CANDIDATES = ("herdr-edit", "spiceedit")
 
 
 def editor_bin():
@@ -183,7 +183,7 @@ def editor_bin():
 
 
 def editor_is_fork():
-    return which("spiceedit-vzt") is not None
+    return which("herdr-edit") is not None
 
 
 def herdr_version():
@@ -411,7 +411,7 @@ def render_plugin(dry, projects_root):
     """
     spice = editor_bin()
     lazy = which("lazygit")
-    missing = [n for n, p in (("spiceedit-vzt or spiceedit", spice), ("lazygit", lazy)) if not p]
+    missing = [n for n, p in (("herdr-edit or spiceedit", spice), ("lazygit", lazy)) if not p]
     if missing:
         die("cannot render plugin, missing: %s (run `herdr-extensions install` without --no-deps)"
             % ", ".join(missing))
@@ -708,7 +708,7 @@ def install_deps(dry):
     brew = which("brew")
     steps = []
     if not editor_bin():
-        steps.append(("spiceedit-vzt", ["brew", "install", "vonzelle-vzt/spice-edit-vzt/spice-edit-vzt"],
+        steps.append(("herdr-edit", ["brew", "install", "vonzelle-vzt/herdr-edit/herdr-edit"],
                       ["brew", "tap", "cloudmanic/spice-edit",
                        "https://github.com/cloudmanic/spice-edit"]))
     if not which("lazygit"):
