@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# Preview panel — renders the project's dev server inside a herdr pane, VS Code Live Preview style.
+#
+# HOW A TERMINAL SHOWS A WEB PAGE. It does not, on its own. There are three ways and only one is
+# worth having here:
+#   * a text-mode browser (w3m, lynx) — no CSS, no layout, useless for looking at a UI;
+#   * carbonyl/browsh — a real engine, but a heavyweight extra dependency;
+#   * headless Chrome screenshot + inline image protocol — actual pixels, actual layout, and both
+#     halves are already present on any machine with Chrome and a modern terminal.
+# So: screenshot the page, render it inline. herdr's `kitty_graphics = true` plus a terminal that
+# implements it (Ghostty, kitty, WezTerm) gives real pixels; chafa degrades to blocks elsewhere.
+#
+# 🔴 Terminal.app implements NO image protocol, ever. There is no fallback that makes this look right
+# there, so the panel says so instead of drawing mush.
+#
+# Launched as a [[panes]] command by open-panel.sh (action open-preview). Absolute paths throughout:
+# herdr execs pane commands under launchd's minimal PATH, which has neither /opt/homebrew/bin nor a
+# vendored node_modules/.bin on it, so a bare `chafa` would never resolve.
+set -uo pipefail
+
+GIT=/usr/bin/git
+PY=/usr/bin/python3
+# 🔴 QUOTED. The rendered Chrome path is "/Applications/Google Chrome.app/..." — it contains SPACES,
+# and an unquoted assignment makes bash set CHAFA/CHROME to the first word and then try to EXECUTE
+# the rest as a command. The panel then reports "Chrome not found" forever, which reads like a
+# missing install rather than a quoting bug.
+CHAFA="@@CHAFA@@"
+CHROME="@@CHROME@@"
+ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+SHOT_DIR="$HOME/.vzt/preview"
+
+# Refresh cadence. Long enough that a screenshot is not thrashing the CPU, short enough that a save
+# shows up without thinking about it. Overridable so a slow app can back off.
+INTERVAL="${HERDR_PREVIEW_INTERVAL:-4}"
+
+# Ports checked in order of how likely they are to be THE dev server for the repo you are looking at.
+# Next/CRA first, then Vite, then Astro, then the generic ones.
+PORTS="${HERDR_PREVIEW_PORTS:-3000 3001 5173 5174 4321 8080 8000 4200 1313}"
+
+# NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so bash
+# collapses runs of it and strips leading/trailing fields — with no file open the payload starts with
+# an empty field and every value silently shifts left, putting the line number into the filename.
+IFS=$'\x1f' read -r active_file active_line active_col active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print("\x1f".join([d.get("file") or "", str(d.get("line") or 1), str(d.get("col") or 1),
+                   d.get("root") or ""]))
+EOF
+)"
+
+repo="$active_root"
+if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+  base="${active_file:-$PWD}"
+  dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
+  repo="$("$GIT" -C "$dir" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$repo" ] || repo="$dir"
+fi
+
+# ---- find the dev server ----------------------------------------------------------------------
+# An explicit URL always wins; otherwise probe the ports for something actually LISTENING. Probing
+# beats reading package.json: the script's --port flag is frequently overridden, and a port that is
+# listening is ground truth where a config file is only an intention.
+detect_url() {
+  if [ -n "${HERDR_PREVIEW_URL:-}" ]; then
+    printf '%s' "$HERDR_PREVIEW_URL"
+    return 0
+  fi
+  for port in $PORTS; do
+    if /usr/sbin/lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      printf 'http://localhost:%s' "$port"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ---- capability check -------------------------------------------------------------------------
+# Say exactly which piece is missing. A preview panel that silently shows nothing is worse than one
+# that explains itself, and each of these has a different fix.
+missing=""
+[ -x "$CHROME" ] || missing="$missing
+  - Google Chrome not found at $CHROME (it renders the page)"
+[ -x "$CHAFA" ] || missing="$missing
+  - chafa not found at $CHAFA (it draws the image in the pane) — brew install chafa"
+
+echo "PREVIEW — $repo"
+echo
+
+if [ -n "$missing" ]; then
+  echo "Cannot render a preview:$missing"
+  echo
+  echo "Press any key to close..."
+  IFS= read -r -n1 -s _ || true
+  exit 0
+fi
+
+case "${TERM_PROGRAM:-}" in
+  Apple_Terminal)
+    echo "Apple Terminal implements no inline-image protocol, so a rendered preview is not possible"
+    echo "here. Use Ghostty, kitty or WezTerm — or open the page in your browser instead."
+    echo
+    ;;
+esac
+
+mkdir -p "$SHOT_DIR" 2>/dev/null || true
+SHOT="$SHOT_DIR/preview.png"
+
+# Match the capture to the pane so the page is laid out at the shape it will be displayed at, rather
+# than being captured wide and squashed. Cells are roughly twice as tall as they are wide; 12x24 px
+# per cell is a reasonable stand-in and keeps the aspect ratio close.
+cols="${COLUMNS:-100}"
+rows="${LINES:-30}"
+[ "$cols" -gt 0 ] 2>/dev/null || cols=100
+[ "$rows" -gt 0 ] 2>/dev/null || rows=30
+shot_w=$((cols * 12))
+shot_h=$(((rows - 4) * 24))
+[ "$shot_w" -ge 320 ] || shot_w=320
+[ "$shot_h" -ge 240 ] || shot_h=240
+
+# 🔴 WAIT FOR THE ARTIFACT, NOT THE PROCESS. Headless Chrome writes the screenshot and then does NOT
+# exit against a dev server: the HMR websocket keeps a live connection, so the renderer never goes
+# idle. Measured against a real Next dev server -- the PNG landed in about a second and Chrome was
+# still running 20 seconds later. Blocking on it means the panel hangs on its very first frame, and
+# refreshing every few seconds would leak a whole Chrome process tree per cycle.
+#
+# So: background it, poll for the file to appear and stop growing, then kill it. The pkill is scoped to
+# OUR --user-data-dir, which is why the panel uses a dedicated profile -- it can never match the
+# user's real Chrome.
+CHROME_TIMEOUT="${HERDR_PREVIEW_TIMEOUT:-15}"
+
+kill_our_chrome() {
+  pkill -9 -f "user-data-dir=$SHOT_DIR/chrome-profile" >/dev/null 2>&1 || true
+}
+# Never leave a process tree behind, however this panel exits.
+trap kill_our_chrome EXIT INT TERM
+
+render_once() {
+  url="$1"
+  rm -f "$SHOT"
+  # --headless=new is the supported mode; the old one prints a deprecation banner and eventually
+  # stops working. A dedicated user-data-dir keeps this out of the real profile so it never touches
+  # the user's live session or fights a running Chrome for the singleton lock.
+  "$CHROME" \
+    --headless=new \
+    --disable-gpu \
+    --hide-scrollbars \
+    --no-first-run \
+    --user-data-dir="$SHOT_DIR/chrome-profile" \
+    --virtual-time-budget=3000 \
+    --window-size="$shot_w,$shot_h" \
+    --screenshot="$SHOT" \
+    "$url" >/dev/null 2>&1 &
+  chrome_pid=$!
+
+  waited=0
+  last_size=-1
+  while [ "$waited" -lt "$CHROME_TIMEOUT" ]; do
+    if [ -s "$SHOT" ]; then
+      size="$(/usr/bin/stat -f %z "$SHOT" 2>/dev/null || echo 0)"
+      # Two equal readings a second apart means the write finished; grabbing a half-written PNG
+      # renders as a torn image.
+      [ "$size" = "$last_size" ] && break
+      last_size="$size"
+    fi
+    kill -0 "$chrome_pid" 2>/dev/null || break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  kill_our_chrome
+  wait "$chrome_pid" 2>/dev/null || true
+
+  if [ ! -s "$SHOT" ]; then
+    echo "Chrome produced no screenshot for $url"
+    return 1
+  fi
+  # --clear so a shorter render never leaves the previous frame's pixels behind it.
+  "$CHAFA" --clear --format=auto --size="${cols}x$((rows - 4))" "$SHOT" 2>/dev/null || {
+    echo "chafa could not draw $SHOT"
+    return 1
+  }
+  return 0
+}
+
+# ---- loop -------------------------------------------------------------------------------------
+# read -t doubles as both the refresh timer and the key handler. Distinguishing its exit codes is
+# load-bearing: 1 means stdin hit EOF, which is how this exits when the pane closes AND how the
+# offline panel tests run it, so treating EOF as a timeout would spin forever and hang the suite.
+while :; do
+  if url="$(detect_url)"; then
+    printf '\033[H\033[2J'
+    echo "PREVIEW  $url   (r refresh, o open in browser, q quit)   every ${INTERVAL}s"
+    echo
+    render_once "$url" || true
+  else
+    printf '\033[H\033[2J'
+    echo "PREVIEW — $repo"
+    echo
+    echo "No dev server is listening on: $PORTS"
+    echo
+    echo "Start one (npm run dev), or set HERDR_PREVIEW_URL to an explicit address."
+    echo "(r retry, q quit)"
+  fi
+
+  IFS= read -r -n1 -s -t "$INTERVAL" key
+  rc=$?
+  if [ "$rc" -eq 1 ]; then
+    break # EOF: the pane closed, or the test harness closed stdin
+  fi
+  case "$key" in
+    q | Q) break ;;
+    o | O)
+      # The escape hatch: full fidelity, real interactivity, in the actual browser.
+      [ -n "${url:-}" ] && /usr/bin/open "$url" >/dev/null 2>&1 || true
+      ;;
+  esac
+done

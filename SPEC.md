@@ -184,6 +184,24 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
     `pngpaste` is a silent partial dependency — without it the clipboard source dies but the
     screenshot fallback still works — so `doctor` names it rather than letting it fail quietly.
 
+16. **A terminal cannot show a web page, so screenshot it.** Three approaches exist: a text-mode
+    browser throws away CSS and layout and tells you nothing about a UI; carbonyl/browsh embed a real
+    engine but add a heavyweight dependency; headless Chrome plus an inline image protocol gives real
+    pixels from two things most machines already have. The Preview panel takes the third.
+    Detection probes for a **listening** port rather than reading `package.json`, because a `--port`
+    flag is frequently overridden — a listening socket is ground truth where a config file is only an
+    intention. 🔴 Apple Terminal implements no image protocol, ever, so the panel says so instead of
+    drawing mush.
+    🔴 **Two bugs here were only findable by running it.** First, the rendered Chrome path contains
+    SPACES (`/Applications/Google Chrome.app/...`) and an unquoted assignment made bash set `CHROME`
+    to `/Applications/Google` and try to execute the rest — the panel then reported "Chrome not found"
+    forever, indistinguishable from a missing install. Second, **headless Chrome writes the screenshot
+    and does not exit** against a dev server: the HMR websocket keeps a connection open so the renderer
+    never idles. Measured — PNG in about a second, Chrome still alive 20 seconds later. Waiting on the
+    process wedged the panel on frame one, and a refreshing panel would leak a whole Chrome process
+    tree every cycle. So: **wait for the artifact, not the process**, then reap by
+    `--user-data-dir`, which is why the panel uses a dedicated profile it can safely `pkill`.
+
 ## Verification (each must pass before release)
 
 | # | Check | Oracle |
@@ -210,6 +228,7 @@ All four need changes *inside* SpiceEdit, which has no extension API — so they
 | 21 | A workspace named after a project opens it | `workspace.created` with `--cwd $HOME` and a label matching a repo under `PROJECTS_ROOT` opens an editor rooted at that repo **and** rendering `EXPLORER`. The positive counterpart to oracle 5 — oracle 5 passing was the whole bug, since it only proved the silent path with a label matching nothing |
 | 22 | Focus is confirmed, never assumed | `plugin action invoke` resolves the globally focused pane, so the harness waits until `pane list` reports the target focused instead of sleeping. A `sleep 1` here was always a race and only lost it once another workspace-creating oracle was added ahead of oracle 6 |
 | 23 | Image paste targets the agent, not a panel | Against a stubbed herdr: an explicit file resolves to an absolute path (compared RESOLVED — macOS `$TMPDIR` is a symlink); a focused agent receives it; focus on ANY of the nine panel labels still delivers to the agent; the fallback stays in the focused pane's own tab rather than a stranger elsewhere; no Enter is sent and a trailing space is; `--clipboard-only` refuses instead of pasting a stale screenshot; `--prune` removes old clips only — `tests/check-image-paste.sh` |
+| 24 | Preview renders and leaks nothing | Against stub chafa/chrome with a Chrome path containing a SPACE: the templated assignments are quoted; an explicit URL is captured and drawn; **no Chrome survives a frame**; a frame completes in bounded time even though the stub browser never exits; no dev server yields an explanation naming `HERDR_PREVIEW_URL`; a missing renderer is named with its fix. The oracle is itself hard-bounded — the regression it catches is a hang, and a gate that hangs is no better than one never run — `tests/check-preview.sh` |
 | 20 | The gate runs every suite | `live-check.sh` delegates to `check-panels.sh`, `check-viability.sh` and `check-project-resolve.sh` rather than reimplementing them, and restores the originally focused workspace when it is done |
 
 ## Distribution

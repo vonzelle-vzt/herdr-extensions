@@ -35,6 +35,7 @@ break, because there are no plugins.
 | `ctrl+b` `shift+b` | Blame and history for the file you are looking at. |
 | `ctrl+b` `shift+v` | Markdown preview. |
 | `ctrl+b` `shift+u` | Tests — vitest / jest / pytest. |
+| `ctrl+b` `shift+a` | **Preview** — the dev server rendered inside a pane, refreshing itself. |
 | `ctrl+b` `i` | **Paste an image** — clipboard screenshot, or the newest capture, typed as a path to the agent. |
 | `ctrl+b` `shift+l` / `shift+h` | Nudge the split divider right / left. |
 
@@ -78,6 +79,30 @@ Every command they run is resolved to an **absolute path**, because the herdr se
 launchd with `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and a bare binary name fails to spawn with no
 useful error. Worth knowing: on many machines `rg` is a *shell function*, so anything that `execve`s
 it fails even though `rg` works fine when you type it.
+
+## Seeing what you are building
+
+`ctrl+b` `shift+a` opens a **Preview** panel: your dev server, rendered as an image inside a herdr
+pane, refreshing every few seconds. It is the terminal equivalent of VS Code's Live Preview.
+
+A terminal cannot display a web page on its own. Three approaches exist and only one is worth having:
+a text-mode browser (`w3m`, `lynx`) throws away CSS and layout, so it tells you nothing about a UI;
+`carbonyl`/`browsh` embed a real engine but are a heavyweight extra dependency; and headless Chrome
+plus an inline image protocol gives you actual pixels using two things you already have. So the panel
+screenshots the page with Chrome and draws it with `chafa` — real rendering, real layout, in a pane.
+
+It finds the server by probing what is **listening** (3000, 3001, 5173, 5174, 4321, 8080, 8000, 4200,
+1313) rather than reading `package.json`, because a `--port` flag is frequently overridden and a
+listening socket is ground truth where a config file is only an intention. Override with
+`HERDR_PREVIEW_URL`, the port list with `HERDR_PREVIEW_PORTS`, the cadence with
+`HERDR_PREVIEW_INTERVAL`.
+
+In the panel: `r` refresh, `o` open the page in your real browser (full fidelity and actually
+clickable — the preview is a picture), `q` close.
+
+**Requirements.** Chrome or Chromium, `chafa` (`brew install chafa`), and a terminal that implements
+an inline image protocol. 🔴 **Apple Terminal implements none, ever** — the panel says so rather than
+drawing mush. Ghostty, kitty and WezTerm all work; herdr needs `kitty_graphics = true`.
 
 ## Images and screenshots in a terminal chat
 

@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 
 HOME = os.path.expanduser("~")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +48,7 @@ SKIN_UI_END = "# <<< herdr-extensions skin (ui) <<<"
 
 # Panel scripts shipped in libexec/ that get copied alongside open-panel.sh into the rendered
 # plugin directory (see render_plugin()) and wired up as [[panes]] + [[actions]] in the manifest.
-PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests", "debug"]
+PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests", "debug", "preview"]
 
 # Keybindings we inject: (key, action id, human description).
 #
@@ -78,6 +78,7 @@ KEYS = [
     # herdr has no mouse divider drag and only a modal resize (prefix+r), so give the divider a
     # one-keypress nudge. shift+h/shift+l mirror herdr's own h/l pane-navigation direction.
     # Images: stage the clipboard image (or newest screenshot) and type its path to the agent.
+    ("prefix+shift+a", "open-preview", "Preview panel: render the dev server (app) in a pane"),
     ("prefix+i", "paste-image", "paste an image/screenshot path to the agent"),
     ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
     ("prefix+shift+h", "resize-narrower", "move the split divider left one step"),
@@ -453,7 +454,18 @@ def render_plugin(dry, projects_root):
     files = [("herdr-plugin.toml", manifest, 0o644), ("open-panel.sh", launcher, 0o755),
              ("resize-pane.sh", resizer, 0o755),
              ("image-paste.sh", imgpaste, 0o755)]
-    files += [(n, open(p).read(), 0o755) for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
+    # Panel scripts are copied verbatim EXCEPT for the same absolute-path templating the manifest
+    # gets: the preview panel shells out to chafa and Chrome, and under launchd's PATH neither a bare
+    # `chafa` nor a bare `chrome` resolves. Substitution is applied to every panel so there is one
+    # rule rather than a special case.
+    chafa = which("chafa") or "chafa"
+    chrome = next((c for c in (
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        which("google-chrome") or "", which("chromium") or "",
+    ) if c and os.path.exists(c)), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    files += [(n, open(p).read().replace("@@CHAFA@@", chafa).replace("@@CHROME@@", chrome), 0o755)
+              for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
     for name, body, mode in files:
         dst = os.path.join(PLUGIN_DST, name)
         old = open(dst).read() if os.path.isfile(dst) else None

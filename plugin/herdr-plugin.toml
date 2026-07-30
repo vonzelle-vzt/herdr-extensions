@@ -22,7 +22,7 @@
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
 id = "herdr-extensions"
 name = "herdr-extensions"
-version = "0.7.0"
+version = "0.8.0"
 description = "Tiny VS Code for herdr: editor + lazygit + problems/search/todo/blame/markdown/tests panels."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
@@ -97,6 +97,14 @@ title = "Markdown"
 placement = "split"
 command = ["bash", "markdown"]
 
+# The preview pane is TALLER than the other bottom panels (0.55) because it shows an image: a
+# 35%-height strip of a rendered web page is not worth looking at.
+[[panes]]
+id = "preview"
+title = "Preview"
+placement = "split"
+command = ["bash", "preview"]
+
 [[panes]]
 id = "tests"
 title = "Tests"
@@ -158,6 +166,13 @@ command = ["bash", "open-panel.sh", "git", "Git", "split", "down", "key", "no", 
 # but an agent reads image PATHS natively, which reduces the whole problem to typing a path onto the
 # prompt line. That works fully locally; herdr's own image paste is --remote only because it tries to
 # bridge the clipboard itself.
+[[actions]]
+id = "open-preview"
+platforms = ["linux", "macos"]
+title = "Preview panel"
+description = "Render the project's dev server inside a pane, refreshing automatically."
+command = ["bash", "open-panel.sh", "preview", "Preview", "split", "down", "key", "no", "0.55"]
+
 [[actions]]
 id = "paste-image"
 platforms = ["linux", "macos"]
