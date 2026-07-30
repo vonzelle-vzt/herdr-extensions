@@ -91,6 +91,12 @@ neither of which Apple Terminal supports at all.
 entry silently overrides a herdr built-in, and herdr gets the blame. The audit covers your own
 bindings too, not just ours.
 
+**A pane will not resize.** `prefix+r` is the *only* resize binding herdr ships (`resize_mode`), so
+anything bound to `prefix+r` removes pane resizing entirely — the symptom is a divider that seems
+stuck rather than a missing keybinding. The `persiyanov.reviewr` plugin binds `prefix+r` by default;
+move it to `prefix+shift+c`. `doctor --keymap` names this specific collision, and note that
+`prefix+shift+r` is *also* reserved, so it is not the escape hatch it looks like.
+
 **The panel is too big, or says "Window too small — please resize".** These are the same problem.
 `herdr plugin pane open` has no `--ratio`, so plugin panels open at a hard 50/50, while the editor
 has a minimum width below which it refuses to draw. Panels are sized in columns here, clamped so
