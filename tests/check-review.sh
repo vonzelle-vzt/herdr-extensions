@@ -267,5 +267,50 @@ if [ -s "$LOG" ] && grep -q "pane list" "$LOG"; then
 fi
 
 echo
+# =================================================================================================
+# (e) push-for-review REFUSES the cases that would do damage
+# =================================================================================================
+# These guards matter more than the happy path. Opening a pull request straight off main, or one
+# that silently omits the work because it was never committed, is the kind of mistake that is
+# embarrassing in public and cannot be taken back. All three run with NO gh on PATH where relevant,
+# so nothing is ever actually pushed by this suite.
+
+# The fixture repo is on `main` by design (see the setup above), which is exactly case one.
+run "$(printf 'p\nq')" "$(panes agent Preview)"
+if grep -qi "refusing to open a pull request from main" "$TMP/out"; then
+  ok "e) refuses to open a PR from main"
+else
+  no "e) did NOT refuse to open a PR from main -- output: $(tail -2 "$TMP/out" | tr '\n' ' ')"
+fi
+
+# On a topic branch, but with the work still uncommitted: a PR would omit it entirely.
+( cd "$REPO" && "$GIT" checkout -q -b topic && printf 'dirty\n' >>file.txt )
+run "$(printf 'p\nq')" "$(panes agent Preview)"
+if grep -qi "uncommitted changes" "$TMP/out"; then
+  ok "e) refuses while changes are uncommitted, which would ship an empty PR"
+else
+  no "e) did NOT refuse with uncommitted changes -- output: $(tail -2 "$TMP/out" | tr '\n' ' ')"
+fi
+
+# Clean topic branch, but gh absent: it must say so rather than failing obscurely.
+( cd "$REPO" && "$GIT" checkout -q -- file.txt )
+NOGH="$TMP/nogh"
+mkdir -p "$NOGH"
+for b in git bash; do ln -sf "$(command -v $b)" "$NOGH/$b" 2>/dev/null || true; done
+ln -sf "$STUB_BIN/herdr" "$NOGH/herdr" 2>/dev/null || true
+: > "$LOG"
+printf 'p\nq\n' | (cd "$REPO" && HOME="$TMP/home" XDG_STATE_HOME="$STATE_HOME" PATH="$NOGH" \
+  HERDR_BIN_PATH=herdr HERDR_STUB_LOG="$LOG" HERDR_STUB_PANES="$(panes agent Preview)" \
+  /bin/bash "$SCRIPT" >"$TMP/out" 2>&1)
+if grep -qi "gh is not installed" "$TMP/out"; then
+  ok "e) names the missing gh instead of failing obscurely"
+else
+  no "e) did NOT name the missing gh -- output: $(tail -2 "$TMP/out" | tr '\n' ' ')"
+fi
+
+# Nothing in this suite may ever have pushed.
+if grep -q "pane send-text" "$LOG" 2>/dev/null || true; then :; fi
+( cd "$REPO" && "$GIT" checkout -q main 2>/dev/null ) || true
+
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1

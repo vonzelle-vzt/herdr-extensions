@@ -261,6 +261,73 @@ NOTES_FILE="${TMPDIR:-/tmp}/herdr-review-notes.$$"
 : > "$NOTES_FILE"
 trap 'rm -f "$NOTES_FILE"' EXIT
 
+# push_for_review mirrors what VS Code actually does when work needs another pair of eyes:
+# commit, push, open a pull request, and let reviewers comment there. The three verbs in this panel
+# are the whole review loop -- FIX it yourself (e), hand it back to the agent (s), or send it out to
+# a human (p) -- and this is the third.
+#
+# Any accumulated notes become the PR body rather than being thrown away: they are already the
+# reviewer notes, and typing them twice is the kind of friction that stops people writing them.
+#
+# Draft by default. A PR that pings reviewers the moment an agent finishes is worse than no PR --
+# undraft is one click, unsending a review request is not.
+push_for_review() {
+  if ! command -v gh >/dev/null 2>&1; then
+    note "gh is not installed -- cannot open a pull request"
+    return 1
+  fi
+  local branch title body_args url
+  branch="$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
+    note "not on a named branch -- cannot open a pull request"
+    return 1
+  fi
+  if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
+    note "refusing to open a pull request from $branch -- switch to a topic branch first"
+    return 1
+  fi
+  if [ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]; then
+    note "you have uncommitted changes -- commit them first, or they will not be in the review"
+    return 1
+  fi
+
+  note "pushing $branch ..."
+  if ! git -C "$repo" push -u origin "$branch" >/dev/null 2>&1; then
+    note "push failed -- resolve it and try again"
+    return 1
+  fi
+
+  title="$branch"
+  body_args=""
+  if [ -s "$NOTES_FILE" ]; then
+    body_args="--body-file $NOTES_FILE"
+  else
+    body_args="--body Opened from the herdr Review panel."
+  fi
+
+  # 🔴 --repo is explicit on purpose. In a repository GitHub knows is a FORK, a bare `gh pr create`
+  # defaults its BASE to the PARENT, so the review lands in someone else repository. It fails with
+  # a message about no commits between the two, which reads like a branch problem and is not one.
+  local slug
+  slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)"
+  if [ -z "$slug" ]; then
+    note "gh could not identify this repository"
+    return 1
+  fi
+  # shellcheck disable=SC2086
+  url="$(cd "$repo" && gh pr create --repo "$slug" --draft --title "$title" $body_args 2>&1 | tail -1)"
+  case "$url" in
+    https://*)
+      note "draft PR opened: $url"
+      : > "$NOTES_FILE"
+      ;;
+    *)
+      note "could not open a PR: $url"
+      return 1
+      ;;
+  esac
+}
+
 send_notes() {
   if [ ! -s "$NOTES_FILE" ]; then
     note "nothing to send yet"
@@ -292,6 +359,7 @@ print_diff
 echo "Type a note as  path:line comment text"
 echo "  e  path:line   open that location in the editor and FIX it"
 echo "  s  send all accumulated notes to the agent pane, then clear them"
+echo "  p  push this branch and open a DRAFT pull request (notes become the body)"
 echo "  b  flip the baseline (branch merge-base <-> HEAD) and reprint the diff"
 echo "  q  quit this panel"
 echo
@@ -303,6 +371,9 @@ while IFS= read -r line; do
       ;;
     s)
       send_notes
+      ;;
+    p)
+      push_for_review
       ;;
     b)
       if [ "$baseline_mode" = "head" ]; then

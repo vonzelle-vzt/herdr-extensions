@@ -22,7 +22,7 @@
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
 id = "herdr-extensions"
 name = "herdr-extensions"
-version = "0.11.0"
+version = "0.12.0"
 description = "Tiny VS Code for herdr: editor + lazygit + problems/search/todo/blame/markdown/tests panels."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
