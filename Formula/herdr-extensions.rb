@@ -1,0 +1,46 @@
+# Homebrew formula for herdr-extensions. This repo is its own tap:
+#
+#   brew tap vonzelle-vzt/herdr-extensions https://github.com/vonzelle-vzt/herdr-extensions
+#   brew install vonzelle-vzt/herdr-extensions/herdr-extensions
+#
+# The README documented exactly that for a long time while this file did not exist, so the tap
+# succeeded and the install failed with "No available formula or cask". Formula/ must exist in the
+# repo being tapped -- that is the whole mechanism.
+class HerdrExtensions < Formula
+  desc "Turn herdr into a terminal IDE: editor, LSP diagnostics, panels, live preview"
+  homepage "https://github.com/vonzelle-vzt/herdr-extensions"
+  url "https://github.com/vonzelle-vzt/herdr-extensions/archive/refs/tags/v0.9.0.tar.gz"
+  sha256 "0d29ecf4d56c6de2c5e689ee2f651673fc656878d7b465a88f7403b299a32f07"
+  license "MIT"
+
+  # Stdlib-only Python 3.9+, which is what macOS ships -- so no python dependency is declared and
+  # no virtualenv is created. herdr itself is intentionally not a dependency: `herdr-extensions
+  # doctor` reports a missing or too-old herdr far more usefully than brew resolution would.
+  depends_on "lazygit" => :recommended
+
+  def install
+    libexec.install "bin", "plugin", "libexec", "skins"
+    (bin/"herdr-extensions").write <<~SH
+      #!/bin/sh
+      exec "#{libexec}/bin/herdr-extensions" "\"
+    SH
+    chmod 0755, bin/"herdr-extensions"
+    doc.install "README.md", "SPEC.md", "UPSTREAM.md", "CLAUDE.md"
+  end
+
+  def caveats
+    <<~EOS
+      Finish setup with:
+        herdr-extensions install
+
+      That installs the editor (herdr-edit), a Nerd Font and prettier if missing,
+      registers the panels, and injects keybindings checked against herdr's own.
+      Then verify with:
+        herdr-extensions doctor
+    EOS
+  end
+
+  test do
+    assert_match "herdr-extensions", shell_output("#{bin}/herdr-extensions --help 2>&1", 0)
+  end
+end
