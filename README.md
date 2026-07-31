@@ -637,7 +637,7 @@ driving it across a whole repo from the Search panel is not wired up.
 by other plugins — the marketplace has 18 review tools, 22 notifiers and 17 remote/mobile options.
 This package is the IDE layer and composes with them rather than reimplementing them.
 
-Permanently out of scope: a plugin system, a TOML library, a DAP client, Windows, and patching
+Permanently out of scope: a plugin system, a TOML library, Windows, and patching
 herdr. See [SPEC.md](SPEC.md).
 
 Anything else that needs to live *inside* the editor lives in

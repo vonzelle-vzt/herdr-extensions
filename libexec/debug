@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
 # Debug panel — the single most-cited thing people lose moving from VS Code to a terminal.
 #
-# This deliberately does NOT implement a debug adapter client. Writing one is months of work, and
-# there are already good terminal DAP clients; the value we add is finding the right one, aiming it
-# at the right target, and reusing the launch configuration the user already has.
+# This panel does NOT implement a debug adapter client, and it never will -- but the REASON changed
+# in 2026-07, so do not read this as "a DAP client is out of scope for the project".
+#
+# The original reasoning was "writing one is months of work, and there are already good terminal DAP
+# clients". Two things undercut it. First, the expensive half already exists: herdr-edit's
+# internal/lsp speaks Content-Length-framed JSON over stdio and is proven against nine language
+# servers, and DAP uses the identical framing -- so a DAP client there is a sibling, not a rewrite.
+# Second, and decisively, an external TUI cannot set a breakpoint on the line you are looking at, and
+# cannot move that breakpoint when you insert a line above it. In-process that is a few dozen lines
+# because every buffer mutation funnels through five call sites; out-of-process it needs the editor
+# to publish every edit. The feature IS the editor integration.
+#
+# So the client lives in herdr-edit (internal/dap), and this package keeps its half: a panel that
+# mirrors the session and writes requests to it. SPEC's rule that anything inside the editor is out
+# of scope HERE is unchanged -- this is that rule being followed, not broken.
 #
 # Resolution order for the target, most specific first:
 #   1. .vscode/launch.json in the repo  — reuse what VS Code already knows about this project
