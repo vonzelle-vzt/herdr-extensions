@@ -72,6 +72,8 @@ import contextlib
 import importlib.util
 import io
 import os
+import shutil
+import tempfile
 import traceback
 from importlib.machinery import SourceFileLoader
 
@@ -151,8 +153,16 @@ def t_26e():
 
 def t_26f():
     old_path = os.environ.get("PATH", "")
-    # Strip PATH to nothing so basedpyright/pyright cannot resolve even if this machine has one.
+    old_home = os.environ.get("HOME", "")
+    # Emptying PATH is NOT enough on its own. which() also searches the directories developer
+    # tools install into -- ~/go/bin, ~/.cargo/bin, every ~/.nvm node bin -- because a herdr pane
+    # runs under the launchd minimal PATH and would otherwise find nothing. So HOME is redirected to
+    # an empty directory too; without it this oracle passed or failed according to whether the
+    # machine happened to have basedpyright installed, i.e. it measured the machine and not the
+    # code. It went green for exactly as long as nobody had installed one.
+    empty_home = tempfile.mkdtemp()
     os.environ["PATH"] = ""
+    os.environ["HOME"] = empty_home
     try:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -160,6 +170,8 @@ def t_26f():
         out = buf.getvalue()
     finally:
         os.environ["PATH"] = old_path
+        os.environ["HOME"] = old_home
+        shutil.rmtree(empty_home, ignore_errors=True)
     want_cmd = " ".join(dict((n, c) for n, _l, c in hx._FALLBACK_LSP_TABLE)["python"])
     check("26f: a missing server dry-run output names the install command (%r)" % want_cmd,
           want_cmd in out, "output: %r" % out)

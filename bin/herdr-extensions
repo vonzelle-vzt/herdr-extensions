@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.16.0"
+VERSION = "0.16.1"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -344,11 +344,28 @@ def which(name):
     p = shutil.which(name)
     if p:
         return p if os.path.isabs(p) else os.path.abspath(p)
-    for pre in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"):
+    # 🔴 This list must stay in step with herdr-edit's lookInToolDirs (internal/lsp/registry.go).
+    # Searching fewer directories than the editor does makes doctor tell you to install a server
+    # you already have -- observed with gopls in ~/go/bin, which the editor resolved and doctor
+    # called missing. A recommendation that is wrong is worse than no recommendation, because it
+    # sends you to fix something that is not broken.
+    home = os.path.expanduser("~")
+    prefixes = [
+        "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+        os.path.join(home, ".local", "bin"),
+        os.path.join(home, "go", "bin"),
+        os.path.join(home, ".cargo", "bin"),
+        os.path.join(home, ".bun", "bin"),
+    ]
+    # npm -g lands in whichever node is active, and no node manager's bin directory is ever on a
+    # plugin pane's PATH. Newest last so it wins, matching the editor's ordering.
+    prefixes += sorted(glob.glob(os.path.join(home, ".nvm", "versions", "node", "*", "bin")))
+    found = None
+    for pre in prefixes:
         cand = os.path.join(pre, name)
-        if os.access(cand, os.X_OK):
-            return cand
-    return None
+        if os.access(cand, os.X_OK) and not os.path.isdir(cand):
+            found = cand
+    return found
 
 
 def herdr_bin():
