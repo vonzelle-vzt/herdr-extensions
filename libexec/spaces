@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+# Spaces panel -- list every herdr workspace ("space") and act on it: focus, rename, close.
+#
+# WHY THIS EXISTS. Right-click is the discoverable way to rename or close a space, and it is
+# UNRELIABLE on Terminal.app, which swallows Button3 -- so the only paths that actually work there
+# are keybindings the user has to remember (ctrl+b shift+w rename, ctrl+b shift+d close, ctrl+b w
+# the picker). This panel absorbs that gap from outside herdr: a list, and a small command line.
+#
+#   <number>       focus that space
+#   r <number>     rename that space (prompts for the new name on the next line)
+#   x <number>     close that space (requires an explicit confirmation naming it)
+#   q              quit
+#
+# 🔴 CLOSING A SPACE DESTROYS WORK -- it takes its panes and any running agents with it. So a close
+# always requires typing back "CLOSE <label>" verbatim, and this panel REFUSES outright to close its
+# OWN space: doing that would kill the panel mid-action, and there would be nobody left to show the
+# result of an operation that just deleted the surface displaying it.
+#
+# Absolute path for herdr, quoted, for the same reason every other panel here needs it: the herdr
+# server execs plugin panes under launchd with PATH=/usr/bin:/bin:/usr/sbin:/sbin, so a bare `herdr`
+# never resolves. \x1f (not a tab) separates fields read out of JSON, because tab is IFS whitespace
+# and collapses/shifts empty fields -- exactly the bug that once put a line number into a filename.
+set -uo pipefail
+
+PY=/usr/bin/python3
+STTY=/bin/stty
+AWK=/usr/bin/awk
+GIT=/usr/bin/git
+herdr_bin="${HERDR_BIN_PATH:-@@HERDR@@}"
+ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+# term_width -- the pane's current column count, re-read on every redraw so a SIGWINCH resize is
+# reflected rather than staying pinned to whatever width the panel opened at.
+term_width() {
+  local w
+  w="$("$STTY" size 2>/dev/null | "$AWK" '{print $2}')"
+  case "$w" in
+    ''|*[!0-9]*|0) w=80 ;;
+  esac
+  printf '%s' "$w"
+}
+
+hr() {
+  printf '%*s\n' "$1" '' | tr ' ' '-'
+}
+
+trunc_width() {
+  "$PY" -c '
+import sys
+w = int(sys.argv[1])
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if len(line) > w:
+        line = line[: max(w - 1, 0)] + "…"
+    print(line)
+' "$1"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Repo context for the header only -- this panel lists EVERY herdr workspace, it does not filter by
+# repo, but check-panels.sh treats every libexec/ script as repo-scoped by default and expects the
+# repo path to show up in the output even with no file open (oracle 16c). Read the same way every
+# other panel here does: \x1f, never a tab.
+# ---------------------------------------------------------------------------------------------
+IFS=$'\x1f' read -r active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    d = {}
+print(d.get("root") or "")
+EOF
+)"
+
+repo="$active_root"
+if [ -z "$repo" ] || [ ! -d "$repo" ]; then
+  repo="$("$GIT" -C "$PWD" rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "$repo" ] || repo="$PWD"
+fi
+
+# ---------------------------------------------------------------------------------------------
+# Resolve THIS panel's own workspace id, so closing it can be refused outright. Order of truth
+# matches open-panel.sh and resize-pane.sh: the context herdr injects for an action or event first
+# (it carries workspace_id directly), else the invoking pane, else whichever pane `pane list` calls
+# focused.
+# ---------------------------------------------------------------------------------------------
+own_ws="$("$PY" - "${HERDR_PLUGIN_CONTEXT_JSON:-}" "$("$herdr_bin" pane list 2>/dev/null)" "${HERDR_PANE_ID:-}" <<'EOF' 2>/dev/null || true
+import json, sys
+
+ctx_raw, panes_raw, env_pane = sys.argv[1:4]
+try:
+    ctx = json.loads(ctx_raw) if ctx_raw else {}
+except Exception:
+    ctx = {}
+
+ws = ctx.get("workspace_id") or ""
+if not ws:
+    try:
+        panes = json.loads(panes_raw)["result"]["panes"]
+    except Exception:
+        panes = []
+    by_id = {p.get("pane_id"): p for p in panes}
+    pid = ctx.get("focused_pane_id") or env_pane or ""
+    cur = by_id.get(pid) or next((p for p in panes if p.get("focused")), None) or {}
+    ws = cur.get("workspace_id") or ""
+print(ws)
+EOF
+)"
+
+fetch_ws() {
+  "$herdr_bin" workspace list 2>/dev/null
+}
+
+# lookup_ws <number> -- id \x1f label \x1f pane_count for the workspace with that NUMBER (herdr's
+# own display index), read out of the last fetch stored in $ws_json. Empty output means no match.
+lookup_ws() {
+  "$PY" - "$ws_json" "$1" <<'EOF'
+import json, sys
+
+raw, num = sys.argv[1:3]
+try:
+    spaces = json.loads(raw)["result"]["workspaces"]
+except Exception:
+    spaces = []
+for w in spaces:
+    if str(w.get("number")) == num:
+        wid = w.get("workspace_id") or ""
+        label = w.get("label") or "(unlabeled)"
+        panes = w.get("pane_count")
+        print("\x1f".join([wid, label, str(panes if panes is not None else 0)]))
+        break
+EOF
+}
+
+# render <width> -- fetches a FRESH workspace list every time, unlike the todo/search panels which
+# scan once and only reflow on resize: a rename or close changes the very rows this panel is showing,
+# so staying pinned to the list from when the panel opened would make the confirmation the user just
+# typed disagree with what they see next.
+render() {
+  local w="$1"
+  echo "Spaces"
+  echo "panel opened from: $repo"
+  hr "$w"
+
+  ws_json="$(fetch_ws)"
+  rows="$("$PY" - "$ws_json" "$own_ws" <<'EOF'
+import json, sys
+
+raw, own = sys.argv[1:3]
+try:
+    spaces = json.loads(raw)["result"]["workspaces"]
+except Exception:
+    spaces = None
+
+if spaces is None:
+    print("\x1e__UNREACHABLE__")
+else:
+    for w in spaces:
+        wid = w.get("workspace_id") or ""
+        num = w.get("number")
+        label = w.get("label") or "(unlabeled)"
+        panes = w.get("pane_count")
+        tabs = w.get("tab_count")
+        agent = w.get("agent_status") or "none"
+        focused = "1" if w.get("focused") else "0"
+        mine = "1" if wid and wid == own else "0"
+        fields = [wid, str(num) if num is not None else "", label,
+                  str(panes) if panes is not None else "", str(tabs) if tabs is not None else "",
+                  agent, focused, mine]
+        print("\x1f".join(fields))
+EOF
+)"
+
+  {
+    case "$rows" in
+      "" )
+        echo "no spaces reported by herdr."
+        ;;
+      $'\x1e__UNREACHABLE__' )
+        echo "could not reach herdr -- workspace list failed."
+        echo "start or check the herdr server, then reopen this panel."
+        ;;
+      * )
+        printf '%-4s %s %-28s %6s %5s %-10s\n' "NUM" " " "LABEL" "PANES" "TABS" "AGENT"
+        while IFS=$'\x1f' read -r wid num label panes tabs agent focused mine; do
+          [ -n "$wid" ] || continue
+          mark=" "
+          [ "$focused" = "1" ] && mark="*"
+          here=""
+          [ "$mine" = "1" ] && here="  (this panel)"
+          printf '%-4s %s %-28s %6s %5s %-10s%s\n' "$num" "$mark" "$label" "$panes" "$tabs" "$agent" "$here"
+        done <<<"$rows"
+        ;;
+    esac
+  } | trunc_width "$w"
+  echo
+}
+
+redraw() {
+  render "$(term_width)"
+  echo "number       focus that space"
+  echo "r <number>   rename a space -- also updates the name the editor auto-open matcher looks for"
+  echo "x <number>   close a space -- destroys its panes and any running agents; asks to confirm"
+  echo "q            quit"
+  echo
+}
+trap redraw WINCH
+redraw
+
+# Same read-loop contract as every other interactive panel here (see libexec/review): rc>128 is a
+# signal whose trap already redrew, so continue and read again; rc=0 is a real line of input; rc=1
+# is EOF (an empty pipe, exactly how the test harness and any non-interactive run see stdin) and
+# must break rather than spin.
+while :; do
+  IFS= read -r line
+  rc=$?
+  if [ "$rc" -gt 128 ]; then
+    continue
+  fi
+  if [ "$rc" -ne 0 ]; then
+    break
+  fi
+
+  case "$line" in
+    q)
+      break
+      ;;
+    "") ;;
+    r\ *)
+      num="$(printf '%s' "${line#r }" | tr -d '[:space:]')"
+      if [ -z "$num" ]; then
+        echo "usage: r <number>"
+      else
+        info="$(lookup_ws "$num")"
+        if [ -z "$info" ]; then
+          echo "no space numbered $num"
+        else
+          IFS=$'\x1f' read -r sel_id sel_label _sel_panes <<<"$info"
+          echo "rename space $num (currently \"$sel_label\") to (leave blank to cancel):"
+          IFS= read -r new_name
+          rrc=$?
+          if [ "$rrc" -ne 0 ] || [ -z "$new_name" ]; then
+            echo "rename cancelled"
+          elif "$herdr_bin" workspace rename "$sel_id" "$new_name" >/dev/null 2>&1; then
+            echo "renamed space $num to \"$new_name\""
+            # 🔴 THIS IS NOT COSMETIC. open-panel.sh resolves which project to open the editor on
+            # by matching a space LABEL against the projects root (exact match, else a unique
+            # prefix/suffix/substring match). Naming a space after a project directory is what
+            # makes the editor start auto-opening there the next time this space is used.
+            echo "note: the editor auto-opens by matching a space name against your projects root -- naming it after a project directory is what makes that happen here from now on."
+          else
+            echo "rename failed"
+          fi
+        fi
+      fi
+      ;;
+    x\ *)
+      num="$(printf '%s' "${line#x }" | tr -d '[:space:]')"
+      if [ -z "$num" ]; then
+        echo "usage: x <number>"
+      else
+        info="$(lookup_ws "$num")"
+        if [ -z "$info" ]; then
+          echo "no space numbered $num"
+        else
+          IFS=$'\x1f' read -r sel_id sel_label sel_panes <<<"$info"
+          if [ -n "$own_ws" ] && [ "$sel_id" = "$own_ws" ]; then
+            echo "refusing to close space $num (\"$sel_label\") -- this panel is running inside it."
+            echo "closing it would end this panel mid-action, and there would be nobody left to see"
+            echo "the result. close it from a different space instead."
+          else
+            echo "closing space $num (\"$sel_label\") destroys $sel_panes pane(s) and any agents in them."
+            echo "type: CLOSE $sel_label"
+            echo "anything else cancels."
+            IFS= read -r confirm
+            crc=$?
+            if [ "$crc" -eq 0 ] && [ "$confirm" = "CLOSE $sel_label" ]; then
+              if "$herdr_bin" workspace close "$sel_id" >/dev/null 2>&1; then
+                echo "closed space $num"
+              else
+                echo "close failed"
+              fi
+            else
+              echo "close cancelled"
+            fi
+          fi
+        fi
+      fi
+      ;;
+    [0-9]*)
+      num="$line"
+      info="$(lookup_ws "$num")"
+      if [ -z "$info" ]; then
+        echo "no space numbered $num"
+      else
+        IFS=$'\x1f' read -r sel_id sel_label _sel_panes <<<"$info"
+        if "$herdr_bin" workspace focus "$sel_id" >/dev/null 2>&1; then
+          echo "focused space $num (\"$sel_label\")"
+        else
+          echo "focus failed"
+        fi
+      fi
+      ;;
+    *)
+      echo "unknown command: $line"
+      ;;
+  esac
+  redraw
+done
+
+exit 0

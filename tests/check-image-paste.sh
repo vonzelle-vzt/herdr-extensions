@@ -21,14 +21,28 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 LOG="$TMP/log"
 
-# Render the launcher the way install does — the repo copy still holds the @@HERDR@@ template.
+# Render through the REAL installer, not a re-implementation of it.
+#
+# 🔴 This block used to substitute @@HERDR@@ itself and nothing else, which is the same masking
+# pattern that let check-review.sh certify a Review panel shipping a literal @@HERDR@@ for its whole
+# life: a test that re-implements the substitution proves the TEST works, not the install. It hid
+# nothing here only until image-paste.sh gained a second placeholder (@@PANEL_TITLES@@), at which
+# point the partial render left invalid Python behind and five oracles failed at once.
+#
+# `render --dest` is the installer's own seam, so whatever install does, this suite sees.
+RENDERED="$TMP/rendered"
+if ! "$ROOT/bin/herdr-extensions" render --dest "$RENDERED" >/dev/null 2>&1; then
+  no "23: could not render the plugin tree (missing herdr-edit or lazygit?) — the rest is untested"
+  echo
+  echo "  $pass passed, $fail failed"
+  exit 1
+fi
 SCRIPT="$TMP/image-paste.sh"
-/usr/bin/python3 - "$ROOT/plugin/image-paste.sh" "$SCRIPT" "$TMP/herdr" <<'PYEOF'
-import sys
-src, dst, herdr = sys.argv[1:4]
-open(dst, "w").write(open(src).read().replace("@@HERDR@@", herdr))
-PYEOF
+cp "$RENDERED/image-paste.sh" "$SCRIPT"
 chmod +x "$SCRIPT"
+if grep -q '@@[A-Z_]*@@' "$SCRIPT"; then
+  no "23: a placeholder survived the real render: $(grep -o '@@[A-Z_]*@@' "$SCRIPT" | sort -u | tr '\n' ' ')"
+fi
 
 cat > "$TMP/herdr" <<'STUBEOF'
 #!/usr/bin/env bash

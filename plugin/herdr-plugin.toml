@@ -22,7 +22,7 @@
 # NOTE the Homebrew binary for SpiceEdit is `spiceedit` — no hyphen — though its tap is spice-edit.
 id = "herdr-extensions"
 name = "herdr-extensions"
-version = "0.16.1"
+version = "0.17.0"
 description = "Tiny VS Code for herdr: editor + lazygit + problems/search/todo/blame/markdown/tests panels."
 min_herdr_version = "0.7.0"
 platforms = ["linux", "macos"]
@@ -119,6 +119,17 @@ id = "review"
 title = "Review"
 placement = "split"
 command = ["bash", "review"]
+
+# Spaces lists every herdr workspace and lets you focus/rename/close one -- right-click is the
+# discoverable route to those and it is unreliable on Terminal.app, which swallows Button3, so
+# this absorbs the gap from outside herdr rather than leaving the user to memorize its keybindings.
+# Sized like Debug/Review (0.4) rather than the plain output panels: it is a list you act on, not
+# just glance at.
+[[panes]]
+id = "spaces"
+title = "Spaces"
+placement = "split"
+command = ["bash", "spaces"]
 
 # Images watches the folders pictures actually land in and types each new one to the agent. herdr
 # cannot take a Finder drag-and-drop locally -- its own config documents remote_image_paste as
@@ -297,6 +308,13 @@ platforms = ["linux", "macos"]
 title = "Review panel"
 description = "Comment on the agent's diff by file:line and send the notes back to it, below the current pane."
 command = ["bash", "open-panel.sh", "review", "Review", "split", "down", "key", "no", "0.45"]
+
+[[actions]]
+id = "open-spaces"
+platforms = ["linux", "macos"]
+title = "Spaces panel"
+description = "List every herdr workspace and focus/rename/close one, below the current pane."
+command = ["bash", "open-panel.sh", "spaces", "Spaces", "split", "down", "key", "no", "0.4"]
 
 # ---------------------------------------------------------------------------------------------
 # Auto-open the editor for every new workspace/project, so a project always comes up VS-Code-shaped

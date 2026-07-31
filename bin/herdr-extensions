@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.16.1"
+VERSION = "0.17.0"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -53,7 +53,8 @@ SKIN_UI_END = "# <<< herdr-extensions skin (ui) <<<"
 
 # Panel scripts shipped in libexec/ that get copied alongside open-panel.sh into the rendered
 # plugin directory (see render_plugin()) and wired up as [[panes]] + [[actions]] in the manifest.
-PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests", "debug", "preview", "review"]
+PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests", "debug", "preview",
+                 "review", "spaces"]
 
 # Keybindings we inject: (key, action id, human description).
 #
@@ -92,6 +93,13 @@ KEYS = [
     ("prefix+shift+k", "open-review", "Review panel: comment on the agent's diff and send it back"),
     ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
     ("prefix+shift+h", "resize-narrower", "move the split divider left one step"),
+    # Right-click is the discoverable way to rename/close a space, and Terminal.app SWALLOWS
+    # Button3, so it does not work there at all -- the only paths left are herdr's own keybindings
+    # (prefix+shift+w rename, prefix+shift+d close, prefix+w the picker), which nobody remembers.
+    # prefix+shift+z was verified free against both herdr's 39 reserved bindings and this user's
+    # own config (`doctor --keymap`) -- shift+q/shift+y/shift+z were the remaining free shifted
+    # letters, and shift+c is taken by this user's own [[keys.command]] binding.
+    ("prefix+shift+z", "open-spaces", "Spaces panel: list/focus/rename/close herdr workspaces"),
 ]
 
 # ---------------------------------------------------------------------------------------------
@@ -613,6 +621,30 @@ def plugin_registered():
 # ---------------------------------------------------------------------------------------------
 
 
+def pane_titles(manifest_text):
+    """Every [[panes]] title in the manifest, in order, deduplicated.
+
+    Parsed rather than restated. A second copy of this list is how oracle 23d went blind once
+    already -- it named a Files panel that had been removed and omitted Preview, so the Preview
+    pane was a legal target for a pasted path and the gate could not see it. Regex rather than a
+    TOML library because this file is stdlib-only on Python 3.9, which has no tomllib.
+    """
+    titles, in_panes = [], False
+    for line in manifest_text.splitlines():
+        st = line.strip()
+        if st.startswith("[[panes]]"):
+            in_panes = True
+            continue
+        if st.startswith("[["):
+            in_panes = False
+            continue
+        if in_panes:
+            m = re.match(r'title\s*=\s*"([^"]*)"', st)
+            if m and m.group(1) not in titles:
+                titles.append(m.group(1))
+    return titles
+
+
 def render_plugin(dry, projects_root, dst=None):
     """Write the plugin manifest + launcher, substituting absolute binary paths.
 
@@ -664,7 +696,25 @@ def render_plugin(dry, projects_root, dst=None):
     src_img = os.path.join(REPO, "plugin", "image-paste.sh")
     if not os.path.isfile(src_img):
         die("package file missing: %s" % src_img)
-    imgpaste = open(src_img).read().replace("@@HERDR@@", herdr_bin)
+    # image-paste.sh must never type a file path into one of OUR panels -- only into an agent. It
+    # used to carry a hand-written copy of the panel titles, which is the restated-list anti-pattern
+    # this repo has already been bitten by twice: that copy once named a "Files" panel that no
+    # longer existed while omitting "Preview", making the Preview pane a legal injection target, and
+    # it silently went stale again the moment the Spaces panel was added. The titles are now DERIVED
+    # from the manifest at install time, so a new [[panes]] entry cannot be forgotten here.
+    panel_titles = pane_titles(manifest)
+    if not panel_titles:
+        die("could not parse any [[panes]] titles out of the manifest; image-paste would have no "
+            "panel exclusions and would type file paths into panels")
+    imgpaste = (open(src_img).read()
+                .replace("@@HERDR@@", herdr_bin)
+                # 🔴 repr, giving SINGLE quotes, and it is load-bearing. This renders into a
+                # `python3 -c "..."` argument that bash itself has in DOUBLE quotes, so a double
+                # quote here closes the bash string early and truncates the python -- the pane
+                # selector then returns nothing and every path silently goes nowhere. Neither
+                # oracle 16b (heredocs only) nor the placeholder check can see that; only running
+                # the rendered script does.
+                .replace("@@PANEL_TITLES@@", ", ".join(repr(t) for t in panel_titles)))
     # The project opener is a PICKER over PROJECTS_ROOT, not a file-scoped panel, so it lives in
     # plugin/ rather than libexec/ -- everything there is held to the active-file panel contract.
     src_project = os.path.join(REPO, "plugin", "project.sh")

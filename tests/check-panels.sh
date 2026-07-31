@@ -90,9 +90,12 @@ mkdir -p "$STATE/spiceedit"
 REPO="$(cd "$ROOT" && /usr/bin/git rev-parse --show-toplevel 2>/dev/null || echo "$ROOT")"
 
 # Panels split into two kinds, and conflating them makes this test lie:
-#   repo-scoped  (search, todo, problems, tests, debug) work without any file and must name the repo
+#   repo-scoped  (search, todo, problems, tests, debug, spaces) work without any file and must name
+#                the repo (spaces does not filter BY repo -- it lists every herdr workspace -- but
+#                it still names the repo it was opened from in its header, and must not misread the
+#                empty-file payload, so it belongs in this bucket rather than a third one)
 #   file-scoped  (blame, markdown) are meaningless without one and must SAY so, not guess
-REPO_SCOPED="search todo problems tests debug"
+REPO_SCOPED="search todo problems tests debug spaces"
 FILE_SCOPED="blame markdown"
 
 # No file open. The payload starts with an empty field — the exact shape that used to shift every

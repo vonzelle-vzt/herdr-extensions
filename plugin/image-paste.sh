@@ -211,10 +211,12 @@ fi
 # an unrelated project.
 pane="$("$herdr_bin" pane list 2>/dev/null | "$PY" -c "
 import sys, json
-# Must match the [[panes]] titles in herdr-plugin.toml exactly. Oracle 23d derives its list from
-# that manifest and fails on any drift — it had to, because this set once named a 'Files' panel that
-# no longer exists while omitting 'Preview', making the Preview panel a legal target for a path.
-PANELS = {'Edit', 'Git', 'Problems', 'Search', 'TODO', 'Debug', 'Blame', 'Markdown', 'Preview', 'Tests', 'Images', 'Project', 'Review'}
+# DERIVED from the [[panes]] titles in herdr-plugin.toml at install time, never restated here.
+# A hand-written copy went stale twice: it once named a Files panel that no longer existed while
+# omitting Preview, which made the Preview pane a legal target for a pasted path, and it went stale
+# again the moment the Spaces panel was added. Oracle 23d parses the same manifest and fails on any
+# drift, so a restated list here is a gate failure rather than a silent hole.
+PANELS = {@@PANEL_TITLES@@}
 try:
     panes = json.load(sys.stdin)['result']['panes']
 except Exception:
