@@ -419,8 +419,14 @@ def plugin_registered():
 # ---------------------------------------------------------------------------------------------
 
 
-def render_plugin(dry, projects_root):
+def render_plugin(dry, projects_root, dst=None):
     """Write the plugin manifest + launcher, substituting absolute binary paths.
+
+    dst defaults to PLUGIN_DST. It is a parameter so `herdr-extensions render --dest <tmp>` can
+    produce a real rendered tree for the oracles to inspect WITHOUT touching the user's plugin
+    directory or linking anything into a live herdr server. Oracle 16m depends on this: the only
+    honest way to prove every placeholder is substituted is to render exactly the way install does
+    and then look at the bytes -- a test that re-implements the substitution proves the test works.
 
     The manifest is a template precisely because pane commands must be absolute (launchd PATH) and
     the correct absolute path differs per machine: /opt/homebrew on Apple Silicon, /usr/local on
@@ -440,34 +446,47 @@ def render_plugin(dry, projects_root):
         if not os.path.isfile(f):
             die("package file missing: %s" % f)
 
+    # herdr itself needs an absolute path for the same launchd-PATH reason every other command here
+    # does: a bare `herdr` never resolves in a plugin action or a plugin-launched pane. Resolved ONCE
+    # here rather than at each call site -- two scripts shipped calling a bare `herdr` precisely
+    # because the substitution was applied per-file and each new file had to remember to opt in.
+    herdr_bin = which("herdr") or "herdr"
+    if not which("herdr"):
+        warn("herdr is not on PATH; plugin scripts will be rendered with a bare `herdr`, which "
+             "does NOT resolve under launchd's PATH — panels that shell herdr will do nothing")
+
     manifest = open(src_manifest).read()
     manifest = manifest.replace("@@SPICEEDIT@@", spice).replace("@@LAZYGIT@@", lazy)
-    launcher = open(src_launcher).read().replace("@@PROJECTS_ROOT@@", projects_root)
-    # resize-pane.sh needs herdr itself by absolute path, for the same launchd-PATH reason every
-    # other command here is absolute: a bare `herdr` never resolves in a plugin action.
+    # open-panel.sh shells `herdr workspace list` to resolve a new space's LABEL to a project under
+    # PROJECTS_ROOT. It hardcoded a bare `herdr` until v0.15.1, so that lookup silently returned
+    # nothing under launchd's PATH and the editor never auto-opened on a newly created space.
+    launcher = (open(src_launcher).read()
+                .replace("@@PROJECTS_ROOT@@", projects_root)
+                .replace("@@HERDR@@", herdr_bin))
     src_resize = os.path.join(REPO, "plugin", "resize-pane.sh")
     if not os.path.isfile(src_resize):
         die("package file missing: %s" % src_resize)
-    resizer = open(src_resize).read().replace("@@HERDR@@", which("herdr") or "herdr")
+    resizer = open(src_resize).read().replace("@@HERDR@@", herdr_bin)
     src_img = os.path.join(REPO, "plugin", "image-paste.sh")
     if not os.path.isfile(src_img):
         die("package file missing: %s" % src_img)
-    imgpaste = open(src_img).read().replace("@@HERDR@@", which("herdr") or "herdr")
+    imgpaste = open(src_img).read().replace("@@HERDR@@", herdr_bin)
     # The project opener is a PICKER over PROJECTS_ROOT, not a file-scoped panel, so it lives in
     # plugin/ rather than libexec/ -- everything there is held to the active-file panel contract.
     src_project = os.path.join(REPO, "plugin", "project.sh")
     projectsh = (open(src_project).read()
-                 .replace("@@HERDR@@", which("herdr") or "herdr")
+                 .replace("@@HERDR@@", herdr_bin)
                  .replace("@@GIT@@", which("git") or "/usr/bin/git")
                  .replace("@@FZF@@", which("fzf") or "/nonexistent/fzf")
                  .replace("@@PROJECTS_ROOT@@", projects_root))
 
+    out_dir = dst or PLUGIN_DST
     if dry:
         act("would write %s (spiceedit=%s, lazygit=%s, %d panel scripts)"
-            % (PLUGIN_DST, spice, lazy, len(PANEL_SCRIPTS)))
+            % (out_dir, spice, lazy, len(PANEL_SCRIPTS)))
         return False
 
-    os.makedirs(PLUGIN_DST, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     changed = False
     files = [("herdr-plugin.toml", manifest, 0o644), ("open-panel.sh", launcher, 0o755),
              ("resize-pane.sh", resizer, 0o755),
@@ -485,20 +504,24 @@ def render_plugin(dry, projects_root):
     # @@SPICEEDIT@@ is substituted into panels as well as the manifest: the Review panel shells the
     # editor with --open-at so a reviewer can jump from a line in the agent's diff to that line in a
     # real editor. Same launchd-PATH reason as CHAFA/CHROME -- a bare binary name never resolves.
+    # @@HERDR@@ belongs here for the same reason and was missing until v0.15.1: libexec/review used
+    # it for `agent prompt`, so the panel's headline feature -- `s`, send these notes to the agent --
+    # shelled the literal string "@@HERDR@@" and did nothing at all, on every installed copy.
     files += [(n, open(p).read()
                .replace("@@CHAFA@@", chafa)
                .replace("@@CHROME@@", chrome)
                .replace("@@SPICEEDIT@@", spice)
+               .replace("@@HERDR@@", herdr_bin)
                .replace("@@DELTA@@", which("delta") or "/nonexistent/delta"), 0o755)
               for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
     for name, body, mode in files:
-        dst = os.path.join(PLUGIN_DST, name)
-        old = open(dst).read() if os.path.isfile(dst) else None
+        path = os.path.join(out_dir, name)
+        old = open(path).read() if os.path.isfile(path) else None
         if old != body:
-            with open(dst, "w") as fh:
+            with open(path, "w") as fh:
                 fh.write(body)
             changed = True
-        os.chmod(dst, mode)
+        os.chmod(path, mode)
     act("plugin files %s" % ("updated" if changed else "already current"))
     return changed
 
@@ -954,6 +977,12 @@ def prettier_available():
 # ---------------------------------------------------------------------------------------------
 
 
+def cmd_render(args):
+    """Render the plugin tree into --dest and stop. A test seam; see the subparser comment."""
+    render_plugin(False, args.projects_root, dst=args.dest)
+    return 0
+
+
 def cmd_install(args):
     head("herdr-extensions install%s" % (" (dry run — nothing will change)" if args.dry_run else ""))
     v = herdr_version()
@@ -1307,6 +1336,15 @@ def main():
     p = sub.add_parser("uninstall", help="remove the plugin and managed keybindings")
     p.add_argument("--purge", action="store_true", help="also remove SpiceEdit configs")
     p.set_defaults(fn=cmd_uninstall)
+
+    # Render the plugin tree WITHOUT linking it, reloading herdr, or installing dependencies.
+    # This exists for oracle 16m: proving no @@PLACEHOLDER@@ survives an install requires the real
+    # rendered bytes, and `install` cannot be used for that because it links the result into a live
+    # herdr server. Not documented in README on purpose -- it is a test seam, not a user command.
+    p = sub.add_parser("render", help=argparse.SUPPRESS)
+    p.add_argument("--dest", required=True, help="directory to render the plugin tree into")
+    p.add_argument("--projects-root", default=os.path.join(HOME, "github-projects"))
+    p.set_defaults(fn=cmd_render)
 
     p = sub.add_parser("doctor", help="diagnose the setup")
     p.add_argument("--keymap", action="store_true",

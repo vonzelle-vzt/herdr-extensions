@@ -117,6 +117,66 @@ for p in $PANELS; do
 done
 
 rm -rf "$STATE"
+
+# ---------------------------------------------------------------------------
+# 16m — every external binary in the INSTALLED tree is an absolute path.
+#
+# Two real bugs of the same family motivated this, and each one is invisible to the other's check:
+#
+#   * libexec/review used @@HERDR@@ for `agent prompt`, but render_plugin() substituted @@HERDR@@
+#     into only three plugin/ scripts -- never into libexec/. Every installed copy shipped the
+#     literal string "@@HERDR@@", so the Review panel's headline feature (`s`, send notes to the
+#     agent) silently did nothing.
+#   * plugin/open-panel.sh did not use a placeholder AT ALL -- it hardcoded a bare `herdr`, which
+#     never resolves under launchd's PATH. The workspace-label -> project lookup therefore returned
+#     nothing and the editor silently failed to auto-open on a newly created space.
+#
+# So a placeholder check alone passes the second bug, and a bare-name check alone passes the first.
+# Both run here, against a REAL render -- not a re-implementation of the substitution, which is how
+# check-review.sh masked the first bug for as long as it existed.
+#
+# The bare-name rule is structural rather than a list of tool names: a variable whose NAME says it
+# holds a binary must not default to a value with no "/" in it. Restating the tool list here would
+# rot the same way the panel-label list in oracle 23d did.
+echo
+DEST="$(mktemp -d)"
+if "$ROOT/bin/herdr-extensions" render --dest "$DEST" >/dev/null 2>&1; then
+  if grep -rlE '@@[A-Z_]+@@' "$DEST" >/dev/null 2>&1; then
+    no "16m: unrendered placeholder survived into the installed tree: $(grep -rhoE '@@[A-Z_]+@@' "$DEST" | sort -u | tr '\n' ' ')"
+  else
+    ok "16m: no unrendered @@PLACEHOLDER@@ in the rendered tree"
+  fi
+
+  bare="$(/usr/bin/python3 - "$DEST" <<'EOF'
+import os, re, sys
+# A variable whose name ends in bin/cmd holds an executable. Its default must be a path.
+assign = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*(?:_?(?:bin|cmd)))\s*=\s*"?(?:\$\{[A-Za-z0-9_]+:-)?([^"}$\s]+)\}?"?\s*$',
+                    re.IGNORECASE)
+bad = []
+for root, _dirs, names in os.walk(sys.argv[1]):
+    for n in names:
+        p = os.path.join(root, n)
+        try:
+            body = open(p, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for i, line in enumerate(body.splitlines(), 1):
+            m = assign.match(line)
+            if m and "/" not in m.group(2):
+                bad.append("%s:%d %s=%s" % (n, i, m.group(1), m.group(2)))
+print("; ".join(bad))
+EOF
+)"
+  if [ -n "$bare" ]; then
+    no "16m: binary invoked by BARE name (never resolves under launchd PATH): $bare"
+  else
+    ok "16m: every *_bin/*_cmd in the rendered tree is an absolute path"
+  fi
+else
+  printf "  \033[33mSKIP\033[0m %s\n" "16m: render failed (missing herdr-edit or lazygit?) — NOT a pass"
+fi
+rm -rf "$DEST"
+
 echo
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
