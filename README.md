@@ -191,7 +191,7 @@ herdr feel like an IDE. Star counts and features checked 2026-07-30.
 | **Typecheck / lint problems** | ✗ | ✗ | ✗ | ✗ | ✓ tsc · eslint · ruff |
 | **Runtime errors from the running app** | ✗ | ✗ | ✗ | console only | ✓ into the Problems panel |
 | **Run tests** | ✗ | ✗ | ✗ | ✗ | ✓ vitest · jest · pytest |
-| **Debug configs** | ✗ | ✗ | ✗ | ✗ | ✓ reads `launch.json` |
+| **Debugger** | ✗ | ✗ | ✗ | ✗ | ✓ live session + `launch.json` |
 | **Live preview of your app** | ✗ | ✗ | ✗ | ✓ full Chromium/CDP | ✓ screenshot, auto-refresh |
 | Markdown preview | ✓ | ✓ | ✗ | — | ✓ |
 | **Paste a screenshot to the agent** | ✗ | ✗ | ✗ | ✗ | ✓ |
@@ -238,7 +238,7 @@ break, because there are no plugins.
 | `ctrl+b` `shift+s` | lazygit source control, below. |
 | `ctrl+b` `shift+m` | Problems — `tsc --noEmit`, `eslint`, `ruff`. |
 | `ctrl+b` `shift+f` | Search — ripgrep across the repo. |
-| `ctrl+b` `d` | Debug — your `.vscode/launch.json`, handed to an installed adapter. |
+| `ctrl+b` `d` | Debug — mirrors the editor's live debug session, and drives it. |
 | `ctrl+b` `t` | TODO / FIXME / HACK / XXX. |
 | `ctrl+b` `shift+b` | Blame and history for the file you are looking at. |
 | `ctrl+b` `shift+v` | Markdown preview. |
@@ -281,7 +281,7 @@ that is absent.
 | **Search** | `ripgrep` across the repo root, grouped by file. 5–10× faster than a GUI search, and it respects `.gitignore` for free. |
 | **TODO** | `TODO` / `FIXME` / `HACK` / `XXX` with file and line. |
 | **Blame** | `git log --follow` and `git show --stat` for the file you are looking at. |
-| **Debug** | Parses the repo's `.vscode/launch.json` — comments and trailing commas included, because it is JSONC — lists the configurations, and hands off to an installed adapter (`koan-debugger`, `debugger-cli`, `dlv`, `lldb-dap`, `tdb`). |
+| **Debug** | A live mirror of the debugger running **inside herdr-edit**, and a remote control for it. Shows the session state, where it stopped, the top of the call stack and every breakpoint with the adapter's own verdict on each; `s` `c` `n` `i` `o` `x` start / continue / step over / in / out / stop, `b` toggles a breakpoint on the line the editor's cursor is on, `Enter` jumps the editor to the selected frame. Still parses the repo's `.vscode/launch.json` — comments and trailing commas included, because it is JSONC — for reference. 🔴 **The panel never speaks the debug adapter protocol.** The client lives in the editor, because a breakpoint has to move when you insert a line above it, and only the process holding the buffer can do that. This side reads `debug-session.json` and writes `debug-request.json` through `herdr-edit --debug`. A session the editor stopped publishing more than a minute ago is reported as **stale** rather than as a program that is still stopped somewhere — a killed editor never gets to write "idle". |
 | **Markdown** | `glow -s dark` on the active file. |
 | **Tests** | Detects vitest / jest / pytest from `package.json` or `pyproject.toml`. |
 | **Project** | A new herdr space starts in `$HOME`, so the editor that opens with it has no project to show — you then start an agent, `cd` into a repo, and the editor is still pointed somewhere else. This picks a repo, **closes and reopens the editor rooted at it** so the tree shows your files, and **renames the space after the repo** so the auto-open matcher resolves it unaided next time. Use it once per space and you stop needing it. |

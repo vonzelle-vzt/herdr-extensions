@@ -1,47 +1,66 @@
 #!/usr/bin/env bash
 # Debug panel — the single most-cited thing people lose moving from VS Code to a terminal.
 #
-# This panel does NOT implement a debug adapter client, and it never will -- but the REASON changed
-# in 2026-07, so do not read this as "a DAP client is out of scope for the project".
+# This panel does NOT implement a debug adapter client, and it never will. It MIRRORS the session
+# the editor is running and writes requests back to it. Both halves matter and the reason is not
+# "writing a DAP client is too much work":
 #
-# The original reasoning was "writing one is months of work, and there are already good terminal DAP
-# clients". Two things undercut it. First, the expensive half already exists: herdr-edit's
-# internal/lsp speaks Content-Length-framed JSON over stdio and is proven against nine language
-# servers, and DAP uses the identical framing -- so a DAP client there is a sibling, not a rewrite.
-# Second, and decisively, an external TUI cannot set a breakpoint on the line you are looking at, and
-# cannot move that breakpoint when you insert a line above it. In-process that is a few dozen lines
-# because every buffer mutation funnels through five call sites; out-of-process it needs the editor
-# to publish every edit. The feature IS the editor integration.
+#   * An external TUI cannot set a breakpoint on the line you are looking at, and cannot move that
+#     breakpoint when you insert a line above it. In-process that is a few dozen lines, because
+#     every buffer mutation in herdr-edit funnels through a handful of call sites. Out of process it
+#     would need the editor to publish every edit. The feature IS the editor integration.
+#   * So the client lives in herdr-edit (internal/dap) and this package keeps its half. SPEC says
+#     anything inside the editor is out of scope HERE -- this is that rule being followed, not
+#     broken.
 #
-# So the client lives in herdr-edit (internal/dap), and this package keeps its half: a panel that
-# mirrors the session and writes requests to it. SPEC's rule that anything inside the editor is out
-# of scope HERE is unchanged -- this is that rule being followed, not broken.
+# What crosses the boundary is two small JSON files under $XDG_STATE_HOME/spiceedit:
 #
-# Resolution order for the target, most specific first:
-#   1. .vscode/launch.json in the repo  — reuse what VS Code already knows about this project
-#   2. the active file from the editor  — debug what you are looking at
-#   3. the repo root                    — last resort, and we say so
+#   active.json         which file the cursor is in       (the shared panel contract)
+#   debug-session.json  what the adapter is doing         (state, stop location, frames, breakpoints)
 #
-# Absolute paths throughout: the herdr server execs this under launchd's minimal PATH
+# and one command back the other way: herdr-edit --debug <action>, which writes debug-request.json
+# for the editor to pick up on its next event tick.
+#
+# 🔴 STALENESS. A cleanly quit editor publishes state "idle" on its way out. A SIGKILLed one
+# publishes nothing at all, so its last payload sits on disk saying "stopped" forever -- and a panel
+# that believes it describes a program that has not existed for a week, in a file the user may since
+# have rewritten. Anything LIVE (starting / running / stopped) older than the payloads own
+# staleAfter window is therefore reported as stale and its location is not shown. The window travels
+# in the payload rather than being hardcoded here, so the editor and this panel cannot drift.
+#
+# Absolute paths throughout: the herdr server execs this under launchd minimal PATH
 # (/usr/bin:/bin:/usr/sbin:/sbin), so a bare binary name fails to spawn with no useful error.
-# NOTE no apostrophes inside any heredoc below — /bin/bash on macOS is still 3.2.57 and mis-parses
-# a lone quote inside a heredoc nested in $( ), which breaks the whole script silently.
+# NOTE no apostrophes anywhere below -- /bin/bash on macOS is still 3.2.57 and mis-parses a lone
+# quote inside a heredoc nested in $( ), which breaks the whole script silently.
 set -uo pipefail
 
 GIT=/usr/bin/git
 PY=/usr/bin/python3
 STTY=/bin/stty
 AWK=/usr/bin/awk
-ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+SLEEP=/bin/sleep
 
-# term_width -- the pane's current column count, re-read on every redraw so a SIGWINCH picks up
-# the new size rather than the one the panel opened at. Falls back to 80 when it cannot be
-# determined (a piped, non-tty invocation, as in the test suite, or no $TERM at all).
+# Absolute, because the herdr server runs under launchd with PATH=/usr/bin:/bin:/usr/sbin:/sbin --
+# a bare `herdr-edit` never resolves and every key here would silently do nothing. Quoted because
+# the rendered path may contain spaces.
+#
+# 🔴 @@SPICEEDIT@@, not @@HERDR@@. render_plugin() substitutes both into libexec/, and routing
+# panel-to-editor traffic through the EDITOR binary is the design: the editor is the process holding
+# the debug adapter client, so a herdr action could not drive a debugger even if it wanted to.
+EDITOR_BIN="@@SPICEEDIT@@"
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit"
+ACTIVE_JSON="$STATE_DIR/active.json"
+SESSION_JSON="$STATE_DIR/debug-session.json"
+
+# term_width -- the pane current column count, re-read on every redraw so a SIGWINCH picks up the
+# new size rather than the one the panel opened at. Falls back to 80 when it cannot be determined
+# (a piped, non-tty invocation, as in the test suite, or no $TERM at all).
 term_width() {
-  # stty size (not tput cols) -- tput queries window size via its OWN stdout, which a bash
-  # command substitution redirects to a pipe, so tput silently falls back to the terminfo
-  # default (80) instead of the pty's real size. stty size reads via its STDIN, which is not
-  # redirected here, so it sees the real window even when captured with $(...).
+  # stty size (not tput cols) -- tput queries window size via its OWN stdout, which a bash command
+  # substitution redirects to a pipe, so tput silently falls back to the terminfo default (80)
+  # instead of the pty real size. stty size reads via its STDIN, which is not redirected here, so
+  # it sees the real window even when captured with $(...).
   local w
   w="$("$STTY" size 2>/dev/null | "$AWK" '{print $2}')"
   case "$w" in
@@ -69,11 +88,100 @@ for line in sys.stdin:
 ' "$1"
 }
 
-# NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so
-# bash collapses runs of it and strips leading/trailing fields — with no file open the
-# payload starts with an empty field and every value silently shifts left, putting the line
-# number into the filename variable. \x1f is non-whitespace, so empty fields are preserved.
-IFS=$'\x1f' read -r active_file active_line active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
+# ---------------------------------------------------------------------------------------------
+# Reading the two state files.
+#
+# NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so bash
+# collapses runs of it and strips leading and trailing empty fields — with no file open the payload
+# starts with an empty field and every value silently shifts left, putting the line number into the
+# filename variable. \x1f is non-whitespace, so empty fields are preserved. This hit all seven
+# panels at once when it was a tab, and the debug session payload has FOUR fields that are routinely
+# empty (adapter, reason, file, config), so it would be worse here.
+# ---------------------------------------------------------------------------------------------
+
+# load_session -- re-read debug-session.json. A function rather than a top-level read because every
+# key press sends a request and then re-renders, and a panel that redrew from the payload it opened
+# with would report the session it drove as unchanged.
+load_session() {
+  IFS=$'\x1f' read -r sess_present sess_state sess_adapter sess_config sess_reason \
+    sess_file sess_line sess_thread sess_nframes sess_frametotal \
+    sess_nbps sess_bptotal sess_stale sess_age sess_root sess_ts <<<"$("$PY" - "$SESSION_JSON" <<'EOF'
+import json, sys, time
+
+LIVE = ("starting", "running", "stopped")
+try:
+    doc = json.load(open(sys.argv[1]))
+    if not isinstance(doc, dict):
+        doc = {}
+except Exception:
+    # Missing, unparseable, half-written: all of them mean the same thing to a reader, which is
+    # that there is nothing to believe. An error here would make a panel that cannot open at all.
+    doc = {}
+
+state = doc.get("state") or ""
+present = "1" if state else "0"
+
+# The staleness window travels IN the payload, so this reader uses the editor own number. 60 is the
+# fallback for a payload written by an editor that predates the field, and nothing else.
+try:
+    window = float(doc.get("staleAfter") or 60)
+except (TypeError, ValueError):
+    window = 60.0
+try:
+    ts = float(doc.get("ts") or 0)
+except (TypeError, ValueError):
+    ts = 0.0
+
+age = max(0.0, time.time() - ts / 1000.0) if ts else 0.0
+stale = "1" if (state in LIVE and ts and age > window) else "0"
+
+if age >= 3600:
+    age_text = "%dh" % int(age // 3600)
+elif age >= 60:
+    age_text = "%dm" % int(age // 60)
+else:
+    age_text = "%ds" % int(age)
+
+
+def num(key):
+    try:
+        return str(int(doc.get(key) or 0))
+    except (TypeError, ValueError):
+        return "0"
+
+
+frames = doc.get("frames") or []
+bps = doc.get("breakpoints") or []
+print("\x1f".join([
+    present,
+    state,
+    doc.get("adapter") or "",
+    doc.get("config") or "",
+    doc.get("reason") or "",
+    doc.get("file") or "",
+    num("line"),
+    num("threadId"),
+    str(len(frames)),
+    num("frameTotal") if doc.get("frameTotal") else str(len(frames)),
+    str(len(bps)),
+    num("breakpointTotal") if doc.get("breakpointTotal") else str(len(bps)),
+    stale,
+    age_text,
+    doc.get("root") or "",
+    # 🔴 The RAW publish timestamp, and the only honest "has the editor said anything new"
+    # signal. age_text was used for this and it ticks over on its own once a second, so every
+    # wait after a keypress reported success within a tick whether the editor had answered or
+    # not -- a freshness check that measured the clock rather than the editor.
+    str(int(ts)),
+]))
+EOF
+)"
+}
+
+# load_active -- re-read active.json. Also refreshed per key press: `b` toggles a breakpoint at the
+# line the editor cursor is on right now, not the one it was on when this panel opened.
+load_active() {
+  IFS=$'\x1f' read -r active_file active_line active_root <<<"$("$PY" - "$ACTIVE_JSON" <<'EOF'
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
@@ -82,8 +190,16 @@ except Exception:
 print("\x1f".join([d.get("file") or "", str(d.get("line") or 1), d.get("root") or ""]))
 EOF
 )"
+}
 
+load_session
+load_active
+
+# Repo resolution, most specific first. The session root and the active root are the same value
+# published by the same editor; either will do, and having both means a panel opened before any file
+# is open still knows where it is.
 repo="$active_root"
+[ -n "$repo" ] || repo="$sess_root"
 if [ -z "$repo" ] || [ ! -d "$repo" ]; then
   base="${active_file:-$PWD}"
   dir="$(cd "$(dirname "$base")" 2>/dev/null && pwd)" || dir="$PWD"
@@ -91,52 +207,168 @@ if [ -z "$repo" ] || [ ! -d "$repo" ]; then
   [ -n "$repo" ] || repo="$dir"
 fi
 
-find_bin() {
-  for d in /opt/homebrew/bin /usr/local/bin "$HOME/.cargo/bin" "$HOME/.local/bin" "$HOME/go/bin" /usr/bin; do
-    if [ -x "$d/$1" ]; then
-      printf '%s' "$d/$1"
-      return 0
-    fi
-  done
-  return 1
+# sel is the frame the panel has selected: 1 is the innermost, which is where a new stop always
+# lands. Enter opens it in the editor; 1-9 move it.
+sel=1
+
+# note carries the result of the last key press into the next render, so a request that was sent --
+# or refused -- is visible rather than being a keystroke that appeared to do nothing.
+note=""
+
+# rel_path <abs> -- print a path relative to the repo when it is inside it.
+#
+# The body goes through trunc_width, and a checkout under /var/folders is long enough on its own to
+# push a stop location past 80 columns and lose the LINE NUMBER off the end of it. The header names
+# the repo once, so repeating it on every frame buys nothing.
+rel_path() {
+  case "$1" in
+    # The repo ITSELF, which is what a Go package target is: delve debug builds a directory, so the
+    # session target for a Go program is the checkout root. Relative-to-itself is the empty string,
+    # so name it instead -- an empty "running:" line reads as a missing value.
+    "$repo") printf '%s' "${repo##*/}/" ;;
+    "$repo"/*) printf '%s' "${1#"$repo"/}" ;;
+    *) printf '%s' "$1" ;;
+  esac
 }
 
-# ---------------------------------------------------------------------------------------------
-# Which debugger to hand off to. koan-debugger reads launch.json directly and has a real TUI, so
-# it is preferred; debugger-cli keeps a session alive across invocations and emits structured
-# output, which is what makes it drivable by the agent in the next pane rather than only by a human.
-# Resolved ONCE, up front: this does not change while the panel is open, unlike the display width.
-# ---------------------------------------------------------------------------------------------
-koan="$(find_bin koan-debugger || true)"
-dcli="$(find_bin debugger || true)"
-dlv="$(find_bin dlv || true)"
-lldbdap="$(find_bin lldb-dap || true)"
-tdb="$(find_bin tdb || true)"
-
-found=0
-for pair in "koan-debugger:$koan" "debugger-cli:$dcli" "delve (dlv):$dlv" "lldb-dap:$lldbdap" "tdb:$tdb"; do
-  path="${pair#*:}"
-  [ -n "$path" ] && found=$((found + 1))
-done
-
-render() {
-  # The header names the repo and active file and must NEVER be clipped by width truncation -- a
-  # long checkout path is exactly the case where losing the tail of it matters most. Only the body
-  # (the part truncation actually exists for) goes through trunc_width; the header is printed
-  # straight, outside render_body.
-  local w="$1"
-  echo "Debug — $repo"
-  [ -n "$active_file" ] && echo "active: $active_file:$active_line"
-  hr "$w"
-  render_body | trunc_width "$w"
+# session_line -- the one-line answer to "is it running, and where".
+session_line() {
+  if [ "$sess_present" != "1" ]; then
+    echo "session: none — no editor is publishing a debug session for this repo"
+    return
+  fi
+  if [ "$sess_stale" = "1" ]; then
+    # 🔴 Deliberately does not repeat what the payload SAID. A stale payload claiming a stop is the
+    # exact thing this panel must stop believing, and quoting it here would put that claim back on
+    # screen next to the word that is supposed to retract it.
+    echo "session: STALE — nothing published for $sess_age; the editor is not running"
+    return
+  fi
+  case "$sess_state" in
+    idle)
+      echo "session: idle — no debug session is running"
+      ;;
+    terminated)
+      echo "session: terminated — the last run finished; its output is in the editor debug console"
+      ;;
+    stopped)
+      local where="session: $sess_adapter stopped"
+      [ -n "$sess_reason" ] && where="$where ($sess_reason)"
+      [ "$sess_thread" != "0" ] && where="$where  thread $sess_thread"
+      echo "$where"
+      ;;
+    *)
+      echo "session: $sess_adapter $sess_state"
+      ;;
+  esac
 }
 
 render_body() {
   echo
+  session_line
+
+  if [ "$sess_present" = "1" ] && [ "$sess_stale" != "1" ] && [ "$sess_state" = "stopped" ]; then
+    [ -n "$sess_file" ] && echo "stopped at: $(rel_path "$sess_file"):$sess_line"
+    [ -n "$sess_config" ] && echo "running: $(rel_path "$sess_config")"
+  fi
+  echo
+
+  # Frames and breakpoints are lists, so they are rendered by a python pass over the same file
+  # rather than being squeezed through the \x1f scalar read. sel draws the marker, and the totals
+  # come from the payload so a capped list can say it was capped -- a snapshot showing 20 of 400
+  # frames with no note has told the reader the stack is 20 deep.
+  "$PY" - "$SESSION_JSON" "$repo" "$sel" <<'EOF'
+import json, os, sys
+
+path, repo, sel_raw = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    doc = json.load(open(path))
+    if not isinstance(doc, dict):
+        doc = {}
+except Exception:
+    doc = {}
+
+try:
+    sel = int(sel_raw)
+except ValueError:
+    sel = 1
+
+
+def rel(p):
+    if p and repo and p.startswith(repo + os.sep):
+        return p[len(repo) + 1:]
+    return p or "??"
+
+
+frames = doc.get("frames") or []
+total = doc.get("frameTotal") or len(frames)
+state = doc.get("state") or ""
+live = state in ("starting", "running", "stopped")
+
+# A stale payload frame list is exactly as untrustworthy as its stop location, so it is withheld for
+# the same reason. Recomputing staleness here rather than passing a flag in keeps one definition of
+# "believe this" per file read.
+try:
+    window = float(doc.get("staleAfter") or 60)
+except (TypeError, ValueError):
+    window = 60.0
+try:
+    ts = float(doc.get("ts") or 0)
+except (TypeError, ValueError):
+    ts = 0.0
+import time
+stale = bool(live and ts and (time.time() - ts / 1000.0) > window)
+
+if frames and not stale:
+    if total > len(frames):
+        print("call stack (top %d of %d frames):" % (len(frames), total))
+    else:
+        print("call stack (%d frames):" % len(frames))
+    for i, f in enumerate(frames, 1):
+        marker = "->" if i == sel else "  "
+        print("  %s %d  %-22s %s"
+              % (marker, i, "%s:%s" % (rel(f.get("file") or ""), f.get("line") or 0),
+                 f.get("name") or "??"))
+    print("")
+
+bps = doc.get("breakpoints") or []
+btotal = doc.get("breakpointTotal") or len(bps)
+if bps:
+    if btotal > len(bps):
+        print("breakpoints (first %d of %d):" % (len(bps), btotal))
+    else:
+        print("breakpoints (%d):" % len(bps))
+    for b in bps:
+        bits = []
+        if not b.get("enabled", True):
+            bits.append("disabled")
+        elif b.get("verified"):
+            bits.append("verified")
+        else:
+            # Honest rather than pessimistic: with no session running nothing has bound anything,
+            # so "not bound" is a statement about the debugger, not about the breakpoint.
+            bits.append("not bound" if (live and not stale) else "no session")
+        if b.get("condition"):
+            bits.append("if %s" % b["condition"])
+        if b.get("logMessage"):
+            bits.append("log %s" % b["logMessage"])
+        print("     %-22s %s" % ("%s:%s" % (rel(b.get("file") or ""), b.get("line") or 0),
+                                 ", ".join(bits)))
+    print("")
+else:
+    print("breakpoints: none set — press b to set one on the active line")
+    print("")
+
+if not live or stale:
+    print("press s to start debugging the file the editor is looking at")
+    print("")
+EOF
 
   # -------------------------------------------------------------------------------------------
   # launch.json is the interesting part: it is how a project already describes what "run this"
   # means, and honouring it is what makes this feel like VS Code rather than like a different tool.
+  # The editor debugs the active file rather than a named configuration, so this is shown for
+  # reference; it is the fastest way to see what a project expects to be run.
   # -------------------------------------------------------------------------------------------
   LAUNCH="$repo/.vscode/launch.json"
   if [ -f "$LAUNCH" ]; then
@@ -164,54 +396,20 @@ for i, c in enumerate(cfgs, 1):
 if not cfgs:
     print("   (no configurations)")
 EOF
-    echo
   else
     echo "no .vscode/launch.json in this repo"
-    echo
   fi
+}
 
-  echo "debug adapters on this machine:"
-  for pair in "koan-debugger:$koan" "debugger-cli:$dcli" "delve (dlv):$dlv" "lldb-dap:$lldbdap" "tdb:$tdb"; do
-    name="${pair%%:*}"
-    path="${pair#*:}"
-    if [ -n "$path" ]; then
-      echo "   installed   $name  ->  $path"
-    else
-      echo "   missing     $name"
-    fi
-  done
-  echo
-
-  if [ "$found" -eq 0 ]; then
-    cat <<'EOF'
-Nothing to debug with yet. Install one:
-
-   cargo install koan-debugger     TUI, reads .vscode/launch.json, Node + LLDB + Delve
-   cargo install debugger-cli      single binary, keeps sessions alive, JSON output for agents
-   uv tool install textual-debugger    Python and C/C++, full TUI
-   go install github.com/go-delve/delve/cmd/dlv@latest    Go
-
-Then reopen this panel.
-EOF
-    return
-  fi
-
-  if [ -n "$koan" ]; then
-    echo "Starting koan-debugger in $repo ..."
-    return
-  fi
-
-  echo "koan-debugger is not installed, so there is no TUI to hand off to."
-  echo "Drive the session from the agent pane instead, for example:"
-  echo
-  [ -n "$dcli" ] && {
-    echo "   $dcli setup lldb            # or python / go / gdb"
-    echo "   $dcli launch <binary>"
-    echo "   $dcli break ${active_file:-<file>}:${active_line}"
-    echo "   $dcli continue && $dcli vars --json"
-  }
-  [ -n "$dlv" ] && echo "   $dlv debug            # Go, from $repo"
-  [ -n "$tdb" ] && echo "   $tdb ${active_file:-<script.py>}"
+render() {
+  # The header names the repo and the active file and must NEVER be clipped by width truncation -- a
+  # long checkout path is exactly the case where losing the tail of it matters most. Only the body
+  # (the part truncation actually exists for) goes through trunc_width.
+  local w="$1"
+  echo "Debug — $repo"
+  [ -n "$active_file" ] && echo "active: $active_file:$active_line"
+  hr "$w"
+  render_body | trunc_width "$w"
 }
 
 redraw() {
@@ -219,26 +417,140 @@ redraw() {
   w="$(term_width)"
   render "$w"
   echo
-  echo "Press any key to close..."
+  [ -n "$note" ] && echo "$note"
+  # Printed OUTSIDE trunc_width, like the header: a legend clipped at 80 columns loses `q quit` off
+  # the end of it, which is the one key a reader most needs to be able to find.
+  echo "keys: s start · c continue · n next · i step in · o step out · x stop"
+  echo "      b toggle breakpoint · Enter jump to frame · 1-9 pick frame · q quit"
+  echo "Press any key to close... (anything not listed above)"
 }
 
-if [ "$found" -gt 0 ] && [ -n "$koan" ]; then
-  # koan-debugger needs the pane's real tty for its own TUI, so the hand-off itself must never run
-  # inside a pipe (that would give koan a non-tty stdout and break its rendering). Print the
-  # informational panel once and exec directly here, outside redraw()'s keypress-wait loop.
-  render "$(term_width)"
-  echo
-  cd "$repo" && exec "$koan"
-fi
+# ---------------------------------------------------------------------------------------------
+# Driving the session. Every key becomes one `herdr-edit --debug <action>` invocation, which writes
+# debug-request.json; the editor honours it from the same polled call site that publishes
+# active.json. Nothing here speaks the debug adapter protocol.
+# ---------------------------------------------------------------------------------------------
+
+# send_debug <action> [location] -- ask the running editor to do something, and say what happened.
+send_debug() {
+  if [ ! -x "$EDITOR_BIN" ]; then
+    note="editor not found at $EDITOR_BIN — cannot send $1"
+    return
+  fi
+  if [ -n "${2:-}" ]; then
+    if "$EDITOR_BIN" --debug "$1" "$2" >/dev/null 2>&1; then
+      note="sent: $1 $2"
+    else
+      note="could not send: $1 $2"
+    fi
+  elif "$EDITOR_BIN" --debug "$1" >/dev/null 2>&1; then
+    note="sent: $1"
+  else
+    note="could not send: $1"
+  fi
+}
+
+# toggle_breakpoint -- `b`, at whatever line the editor cursor is on. The panel has no cursor of its
+# own and inventing one would give the user two places a breakpoint could be going.
+toggle_breakpoint() {
+  if [ -z "$active_file" ]; then
+    note="no active file — open one in the editor first"
+    return
+  fi
+  send_debug toggle-breakpoint "$active_file:$active_line"
+}
+
+# open_selected_frame -- Enter, via --open-at rather than --debug: jumping to a frame is a NAVIGATION
+# request, the same one the Review panel makes, and it works whether or not the session is still
+# alive. Routing it through the debug request file would need the editor to hold a frame list that
+# matches the one on screen here, which is a second source of truth for no gain.
+open_selected_frame() {
+  local loc
+  loc="$("$PY" - "$SESSION_JSON" "$sel" <<'EOF'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+    frames = doc.get("frames") or []
+except Exception:
+    frames = []
+try:
+    i = int(sys.argv[2])
+except ValueError:
+    i = 1
+if 1 <= i <= len(frames):
+    f = frames[i - 1]
+    if f.get("file"):
+        print("%s:%s" % (f["file"], f.get("line") or 1))
+EOF
+)"
+  if [ -z "$loc" ]; then
+    note="frame $sel has no source to open"
+    return
+  fi
+  if [ ! -x "$EDITOR_BIN" ]; then
+    note="editor not found at $EDITOR_BIN — cannot open $loc"
+    return
+  fi
+  if "$EDITOR_BIN" --open-at "$loc" >/dev/null 2>&1; then
+    note="opened frame $sel at $(rel_path "${loc%:*}"):${loc##*:}"
+  else
+    note="could not open $loc"
+  fi
+}
+
+# WAIT_TICKS -- how long to wait for the editor to publish a NEW session after a request, at 0.2s a
+# tick. Bounded by construction and short on purpose: the editor honours the request from its event
+# loop, which wakes on input or on its 10-second tree-refresh tick, so a panel that waited for the
+# worst case would appear to hang for ten seconds on every keypress. Waiting a little catches the
+# common case; the render after it is honest either way.
+WAIT_TICKS=10
+
+# await_editor -- poll until the published session differs from what we already had.
+await_editor() {
+  local before="$1" waited=0
+  while [ "$waited" -lt "$WAIT_TICKS" ]; do
+    "$SLEEP" 0.2
+    load_session
+    if [ "$sess_ts" != "$before" ]; then
+      return 0
+    fi
+    waited=$((waited + 1))
+  done
+  note="$note — the editor has not applied it yet; it picks requests up on its next event tick"
+  return 1
+}
 
 trap redraw WINCH
 redraw
 
-# `[ "$rc" -gt 128 ]` is load-bearing: with stdin at EOF (which is how the test harness and any
-# non-interactive run see it) read returns 1, and this loop must still break rather than spin.
+# The read loop distinguishes three outcomes explicitly, the same rule every other panel here
+# follows: rc>128 is a signal (SIGWINCH) whose trap has already redrawn, so read again rather than
+# treating the interrupted read as a keypress; rc!=0 is EOF, which is how the test harness and any
+# non-interactive run see stdin, and MUST break rather than spin; rc=0 is a real key.
 while :; do
-  IFS= read -r -n1 -s _
+  IFS= read -r -n1 -s key
   rc=$?
   [ "$rc" -gt 128 ] && continue
-  break
+  [ "$rc" -ne 0 ] && break
+
+  note=""
+  before="$sess_ts"
+  case "$key" in
+    q) break ;;
+    s) send_debug start; await_editor "$before" ;;
+    c) send_debug continue; await_editor "$before" ;;
+    n) send_debug next; await_editor "$before" ;;
+    i) send_debug stepIn; await_editor "$before" ;;
+    o) send_debug stepOut; await_editor "$before" ;;
+    x) send_debug stop; await_editor "$before" ;;
+    b) toggle_breakpoint; await_editor "$before" ;;
+    [1-9]) sel="$key" ;;
+    "") open_selected_frame ;;
+    *) break ;;
+  esac
+  load_session
+  load_active
+  redraw
 done
+
+exit 0
