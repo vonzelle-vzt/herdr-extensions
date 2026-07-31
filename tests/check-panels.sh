@@ -28,29 +28,60 @@ for p in $PANELS; do
   fi
 done
 
-# --- 16b: no apostrophe inside a heredoc (bash 3.2 mis-parses it inside $( )) -------------------
+# --- 16b: heredoc apostrophes bash 3.2 mis-parses inside $( ) ---------------------------------
 if /usr/bin/python3 - "$ROOT" <<'PYEOF'
-import glob, os, sys
+# Two rules, because this oracle had two blind spots and both were found the hard way.
+#
+# 1. It globbed only libexec/ and plugin/*.sh, so a break in tests/ sailed through -- which is
+#    exactly what happened: a comment reading "launchd" + apostrophe + "s" inside a heredoc in
+#    tests/check-langservers.sh turned the whole suite into a syntax error at EOF.
+# 2. It matched only the literal tag EOF, so a heredoc opened as <<PYEOF (quoted) was invisible
+#    to it even inside a covered directory.
+#
+# The precise trigger, measured against /bin/bash 3.2.57 rather than assumed: an ODD number of
+# apostrophes on a line inside a heredoc that was opened within $( ). A balanced pair is fine --
+# a Python regex like r'\s*' parses happily, which is why 19 of the 21 apostrophes in this tree
+# are harmless and flagging them all would be noise nobody acts on.
+#
+# libexec/ and plugin/ keep the STRICTER rule (no apostrophe at all): those ship to users, they
+# have shipped broken before, and the cost of the stricter rule there is a reworded comment.
+import glob, os, re, sys
+
+root = sys.argv[1]
+OPEN = re.compile(r"<<-?" + chr(39) + r"([A-Za-z_][A-Za-z0-9_]*)" + chr(39))
+APOS = chr(39)
+
+strict = sorted(glob.glob(os.path.join(root, "libexec", "*")) +
+                glob.glob(os.path.join(root, "plugin", "*.sh")))
+loose = sorted(glob.glob(os.path.join(root, "tests", "*.sh")))
+
 bad = []
-for fn in glob.glob(os.path.join(sys.argv[1], "libexec", "*")) + glob.glob(os.path.join(sys.argv[1], "plugin", "*.sh")):
-    inside = False
+for fn in strict + loose:
+    is_strict = fn in strict
+    tag, in_subst = None, False
     for i, line in enumerate(open(fn, errors="replace").read().splitlines(), 1):
-        if "<<" + chr(39) + "EOF" + chr(39) in line:
-            inside = True
+        if tag is None:
+            m = OPEN.search(line)
+            if m:
+                tag = m.group(1)
+                in_subst = "$(" in line
             continue
-        if line.strip() == "EOF":
-            inside = False
+        if line.strip() == tag:
+            tag = None
             continue
-        if inside and chr(39) in line:
+        n = line.count(APOS)
+        if n == 0:
+            continue
+        if is_strict or (in_subst and n % 2 == 1):
             bad.append("%s:%d" % (os.path.basename(fn), i))
 if bad:
     print(" ".join(bad))
 sys.exit(1 if bad else 0)
 PYEOF
 then
-  ok "16b: no apostrophes inside any heredoc"
+  ok "16b: no heredoc apostrophe that bash 3.2 would mis-parse (libexec+plugin strict, tests nested-in-\$( ) odd-count)"
 else
-  no "16b: an apostrophe inside a heredoc will break bash 3.2"
+  no "16b: an apostrophe inside a heredoc will break bash 3.2 (offending file:line printed above)"
 fi
 
 # --- 16c: the active-file contract, in both states ----------------------------------------------
