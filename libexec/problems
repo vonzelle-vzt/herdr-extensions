@@ -11,12 +11,49 @@ set -uo pipefail
 
 GIT=/usr/bin/git
 PY=/usr/bin/python3
+STTY=/bin/stty
+AWK=/usr/bin/awk
 ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
 
 # Same stable path libexec/preview writes to. Its mtime is the freshness signal: a preview panel
 # nobody has open should not make this panel shout about a page that is not being looked at.
 CONSOLE_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-extensions/preview-console.log"
 CONSOLE_LOG_MAX_AGE="${HERDR_PREVIEW_LOG_MAX_AGE:-120}"
+
+# term_width -- the pane's current column count, re-read on every redraw so a SIGWINCH picks up
+# the new size rather than the one the panel opened at. Falls back to 80 when it cannot be
+# determined (a piped, non-tty invocation, as in the test suite, or no $TERM at all).
+term_width() {
+  # stty size (not tput cols) -- tput queries window size via its OWN stdout, which a bash
+  # command substitution redirects to a pipe, so tput silently falls back to the terminfo
+  # default (80) instead of the pty's real size. stty size reads via its STDIN, which is not
+  # redirected here, so it sees the real window even when captured with $(...).
+  local w
+  w="$("$STTY" size 2>/dev/null | "$AWK" '{print $2}')"
+  case "$w" in
+    ''|*[!0-9]*|0) w=80 ;;
+  esac
+  printf '%s' "$w"
+}
+
+# hr <width> -- a horizontal rule exactly <width> columns wide, so the header visibly reflows.
+hr() {
+  printf '%*s\n' "$1" '' | tr ' ' '-'
+}
+
+# trunc_width <width> -- clip each line of stdin to at most <width> columns, so a panel that was
+# drawn wide and then squeezed narrower does not leave stale-width lines wrapping into each other.
+trunc_width() {
+  "$PY" -c '
+import sys
+w = int(sys.argv[1])
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if len(line) > w:
+        line = line[: max(w - 1, 0)] + "…"
+    print(line)
+' "$1"
+}
 
 # NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so
 # bash collapses runs of it and strips leading/trailing fields — with no file open the
@@ -41,9 +78,6 @@ if [ -z "$repo" ] || [ ! -d "$repo" ]; then
   [ -n "$repo" ] || repo="$dir"
 fi
 
-echo "Problems — $repo"
-echo
-
 find_node_bin() {   # find_node_bin <name>  -- walk up from $repo for a vendored node_modules/.bin
   local dir="$repo" name="$1"
   while [ -n "$dir" ] && [ "$dir" != "/" ]; do
@@ -67,13 +101,16 @@ find_abs() {   # find_abs <name>  -- common absolute install locations, launchd 
   return 1
 }
 
+# Gather diagnostics ONCE, up front, not on every redraw: SIGWINCH should reflow the display, not
+# re-invoke tsc/eslint/ruff for every resize the user does while reading the output.
 tsc_out=""
+tsc_missing_msg=""
 if [ -f "$repo/tsconfig.json" ]; then
   tsc_bin="$(find_node_bin tsc || true)"
   if [ -n "$tsc_bin" ]; then
     tsc_out="$("$tsc_bin" --noEmit --pretty false -p "$repo" 2>&1 || true)"
   else
-    echo "tsc: tsconfig.json present but no vendored tsc in node_modules/.bin (run npm/pnpm/yarn install)"
+    tsc_missing_msg="tsc: tsconfig.json present but no vendored tsc in node_modules/.bin (run npm/pnpm/yarn install)"
   fi
 fi
 
@@ -92,7 +129,22 @@ if [ -n "$ruff_bin" ] && { [ -f "$repo/pyproject.toml" ] || [ -f "$repo/ruff.tom
   ruff_json="$("$ruff_bin" check "$repo" --output-format json 2>/dev/null || true)"
 fi
 
-"$PY" - "$tsc_out" "$eslint_json" "$ruff_json" <<'EOF'
+render() {
+  # The header names the repo and must NEVER be clipped by width truncation -- a long checkout
+  # path is exactly the case where losing the tail of it matters most. Only the body (the part
+  # truncation actually exists for) goes through trunc_width; the header line is printed straight.
+  local w="$1"
+  echo "Problems — $repo"
+  hr "$w"
+  render_body "$w" | trunc_width "$w"
+}
+
+render_body() {
+  echo
+
+  [ -n "$tsc_missing_msg" ] && echo "$tsc_missing_msg"
+
+  "$PY" - "$tsc_out" "$eslint_json" "$ruff_json" <<'EOF'
 import json, re, sys
 
 tsc_out, eslint_json, ruff_json = sys.argv[1:4]
@@ -135,10 +187,10 @@ else:
     print("%d problem(s) across %d file(s)" % (len(items), len(by_file)))
 EOF
 
-# ---- runtime diagnostics, from the Preview panel's console log ---------------------------------
-# Absence is not an error: no log, or a stale one, means nobody has the Preview panel open right
-# now, and a panel that shouts about a preview nobody opened is noise -- print nothing extra.
-"$PY" - "$CONSOLE_LOG" "$CONSOLE_LOG_MAX_AGE" "$repo" <<'EOF'
+  # ---- runtime diagnostics, from the Preview panel's console log -----------------------------
+  # Absence is not an error: no log, or a stale one, means nobody has the Preview panel open right
+  # now, and a panel that shouts about a preview nobody opened is noise -- print nothing extra.
+  "$PY" - "$CONSOLE_LOG" "$CONSOLE_LOG_MAX_AGE" "$repo" <<'EOF'
 import os
 import sys
 import time
@@ -208,7 +260,21 @@ for loc in sorted(by_loc):
 print()
 print("%d runtime problem(s) across %d location(s)" % (len(records), len(by_loc)))
 EOF
+}
 
-echo
-echo "Press any key to close..."
-IFS= read -r -n1 -s _ || true
+redraw() {
+  local w
+  w="$(term_width)"
+  render "$w"
+  echo
+  echo "Press any key to close..."
+}
+trap redraw WINCH
+redraw
+
+while :; do
+  IFS= read -r -n1 -s _
+  rc=$?
+  [ "$rc" -gt 128 ] && continue
+  break
+done
