@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
 # Debug panel — the single most-cited thing people lose moving from VS Code to a terminal.
 #
-# This deliberately does NOT implement a debug adapter client. Writing one is months of work, and
-# there are already good terminal DAP clients; the value we add is finding the right one, aiming it
-# at the right target, and reusing the launch configuration the user already has.
+# This panel does NOT implement a debug adapter client, and it never will -- but the REASON changed
+# in 2026-07, so do not read this as "a DAP client is out of scope for the project".
+#
+# The original reasoning was "writing one is months of work, and there are already good terminal DAP
+# clients". Two things undercut it. First, the expensive half already exists: herdr-edit's
+# internal/lsp speaks Content-Length-framed JSON over stdio and is proven against nine language
+# servers, and DAP uses the identical framing -- so a DAP client there is a sibling, not a rewrite.
+# Second, and decisively, an external TUI cannot set a breakpoint on the line you are looking at, and
+# cannot move that breakpoint when you insert a line above it. In-process that is a few dozen lines
+# because every buffer mutation funnels through five call sites; out-of-process it needs the editor
+# to publish every edit. The feature IS the editor integration.
+#
+# So the client lives in herdr-edit (internal/dap), and this package keeps its half: a panel that
+# mirrors the session and writes requests to it. SPEC's rule that anything inside the editor is out
+# of scope HERE is unchanged -- this is that rule being followed, not broken.
 #
 # Resolution order for the target, most specific first:
 #   1. .vscode/launch.json in the repo  — reuse what VS Code already knows about this project
@@ -18,7 +30,44 @@ set -uo pipefail
 
 GIT=/usr/bin/git
 PY=/usr/bin/python3
+STTY=/bin/stty
+AWK=/usr/bin/awk
 ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+# term_width -- the pane's current column count, re-read on every redraw so a SIGWINCH picks up
+# the new size rather than the one the panel opened at. Falls back to 80 when it cannot be
+# determined (a piped, non-tty invocation, as in the test suite, or no $TERM at all).
+term_width() {
+  # stty size (not tput cols) -- tput queries window size via its OWN stdout, which a bash
+  # command substitution redirects to a pipe, so tput silently falls back to the terminfo
+  # default (80) instead of the pty's real size. stty size reads via its STDIN, which is not
+  # redirected here, so it sees the real window even when captured with $(...).
+  local w
+  w="$("$STTY" size 2>/dev/null | "$AWK" '{print $2}')"
+  case "$w" in
+    ''|*[!0-9]*|0) w=80 ;;
+  esac
+  printf '%s' "$w"
+}
+
+# hr <width> -- a horizontal rule exactly <width> columns wide, so the header visibly reflows.
+hr() {
+  printf '%*s\n' "$1" '' | tr ' ' '-'
+}
+
+# trunc_width <width> -- clip each line of stdin to at most <width> columns, so a panel that was
+# drawn wide and then squeezed narrower does not leave stale-width lines wrapping into each other.
+trunc_width() {
+  "$PY" -c '
+import sys
+w = int(sys.argv[1])
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if len(line) > w:
+        line = line[: max(w - 1, 0)] + "…"
+    print(line)
+' "$1"
+}
 
 # NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so
 # bash collapses runs of it and strips leading/trailing fields — with no file open the
@@ -52,18 +101,47 @@ find_bin() {
   return 1
 }
 
-echo "Debug — $repo"
-[ -n "$active_file" ] && echo "active: $active_file:$active_line"
-echo
+# ---------------------------------------------------------------------------------------------
+# Which debugger to hand off to. koan-debugger reads launch.json directly and has a real TUI, so
+# it is preferred; debugger-cli keeps a session alive across invocations and emits structured
+# output, which is what makes it drivable by the agent in the next pane rather than only by a human.
+# Resolved ONCE, up front: this does not change while the panel is open, unlike the display width.
+# ---------------------------------------------------------------------------------------------
+koan="$(find_bin koan-debugger || true)"
+dcli="$(find_bin debugger || true)"
+dlv="$(find_bin dlv || true)"
+lldbdap="$(find_bin lldb-dap || true)"
+tdb="$(find_bin tdb || true)"
 
-# ---------------------------------------------------------------------------------------------
-# launch.json is the interesting part: it is how a project already describes what "run this" means,
-# and honouring it is what makes this feel like VS Code rather than like a different tool.
-# ---------------------------------------------------------------------------------------------
-LAUNCH="$repo/.vscode/launch.json"
-if [ -f "$LAUNCH" ]; then
-  echo "launch configurations (.vscode/launch.json):"
-  "$PY" - "$LAUNCH" <<'EOF'
+found=0
+for pair in "koan-debugger:$koan" "debugger-cli:$dcli" "delve (dlv):$dlv" "lldb-dap:$lldbdap" "tdb:$tdb"; do
+  path="${pair#*:}"
+  [ -n "$path" ] && found=$((found + 1))
+done
+
+render() {
+  # The header names the repo and active file and must NEVER be clipped by width truncation -- a
+  # long checkout path is exactly the case where losing the tail of it matters most. Only the body
+  # (the part truncation actually exists for) goes through trunc_width; the header is printed
+  # straight, outside render_body.
+  local w="$1"
+  echo "Debug — $repo"
+  [ -n "$active_file" ] && echo "active: $active_file:$active_line"
+  hr "$w"
+  render_body | trunc_width "$w"
+}
+
+render_body() {
+  echo
+
+  # -------------------------------------------------------------------------------------------
+  # launch.json is the interesting part: it is how a project already describes what "run this"
+  # means, and honouring it is what makes this feel like VS Code rather than like a different tool.
+  # -------------------------------------------------------------------------------------------
+  LAUNCH="$repo/.vscode/launch.json"
+  if [ -f "$LAUNCH" ]; then
+    echo "launch configurations (.vscode/launch.json):"
+    "$PY" - "$LAUNCH" <<'EOF'
 import json, re, sys
 
 # launch.json is JSONC: VS Code allows comments and trailing commas, which json.load rejects.
@@ -86,39 +164,26 @@ for i, c in enumerate(cfgs, 1):
 if not cfgs:
     print("   (no configurations)")
 EOF
-  echo
-else
-  echo "no .vscode/launch.json in this repo"
-  echo
-fi
-
-# ---------------------------------------------------------------------------------------------
-# Which debugger to hand off to. koan-debugger reads launch.json directly and has a real TUI, so
-# it is preferred; debugger-cli keeps a session alive across invocations and emits structured
-# output, which is what makes it drivable by the agent in the next pane rather than only by a human.
-# ---------------------------------------------------------------------------------------------
-koan="$(find_bin koan-debugger || true)"
-dcli="$(find_bin debugger || true)"
-dlv="$(find_bin dlv || true)"
-lldbdap="$(find_bin lldb-dap || true)"
-tdb="$(find_bin tdb || true)"
-
-echo "debug adapters on this machine:"
-found=0
-for pair in "koan-debugger:$koan" "debugger-cli:$dcli" "delve (dlv):$dlv" "lldb-dap:$lldbdap" "tdb:$tdb"; do
-  name="${pair%%:*}"
-  path="${pair#*:}"
-  if [ -n "$path" ]; then
-    echo "   installed   $name  ->  $path"
-    found=$((found + 1))
+    echo
   else
-    echo "   missing     $name"
+    echo "no .vscode/launch.json in this repo"
+    echo
   fi
-done
-echo
 
-if [ "$found" -eq 0 ]; then
-  cat <<'EOF'
+  echo "debug adapters on this machine:"
+  for pair in "koan-debugger:$koan" "debugger-cli:$dcli" "delve (dlv):$dlv" "lldb-dap:$lldbdap" "tdb:$tdb"; do
+    name="${pair%%:*}"
+    path="${pair#*:}"
+    if [ -n "$path" ]; then
+      echo "   installed   $name  ->  $path"
+    else
+      echo "   missing     $name"
+    fi
+  done
+  echo
+
+  if [ "$found" -eq 0 ]; then
+    cat <<'EOF'
 Nothing to debug with yet. Install one:
 
    cargo install koan-debugger     TUI, reads .vscode/launch.json, Node + LLDB + Delve
@@ -128,12 +193,14 @@ Nothing to debug with yet. Install one:
 
 Then reopen this panel.
 EOF
-else
+    return
+  fi
+
   if [ -n "$koan" ]; then
     echo "Starting koan-debugger in $repo ..."
-    echo
-    cd "$repo" && exec "$koan"
+    return
   fi
+
   echo "koan-debugger is not installed, so there is no TUI to hand off to."
   echo "Drive the session from the agent pane instead, for example:"
   echo
@@ -145,11 +212,33 @@ else
   }
   [ -n "$dlv" ] && echo "   $dlv debug            # Go, from $repo"
   [ -n "$tdb" ] && echo "   $tdb ${active_file:-<script.py>}"
+}
+
+redraw() {
+  local w
+  w="$(term_width)"
+  render "$w"
+  echo
+  echo "Press any key to close..."
+}
+
+if [ "$found" -gt 0 ] && [ -n "$koan" ]; then
+  # koan-debugger needs the pane's real tty for its own TUI, so the hand-off itself must never run
+  # inside a pipe (that would give koan a non-tty stdout and break its rendering). Print the
+  # informational panel once and exec directly here, outside redraw()'s keypress-wait loop.
+  render "$(term_width)"
+  echo
+  cd "$repo" && exec "$koan"
 fi
 
-echo
-echo "Press any key to close..."
-# `|| true` is load-bearing: with stdin at EOF (which is how the test harness and any
-# non-interactive run see it) read returns non-zero, and as the last command that becomes the
-# script exit status — making a panel that worked perfectly look like it failed.
-IFS= read -r -n1 -s _ || true
+trap redraw WINCH
+redraw
+
+# `[ "$rc" -gt 128 ]` is load-bearing: with stdin at EOF (which is how the test harness and any
+# non-interactive run see it) read returns 1, and this loop must still break rather than spin.
+while :; do
+  IFS= read -r -n1 -s _
+  rc=$?
+  [ "$rc" -gt 128 ] && continue
+  break
+done

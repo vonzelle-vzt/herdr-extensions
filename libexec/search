@@ -8,7 +8,44 @@ set -uo pipefail
 
 GIT=/usr/bin/git
 PY=/usr/bin/python3
+STTY=/bin/stty
+AWK=/usr/bin/awk
 ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+# term_width -- the pane's current column count, re-read on every redraw so a SIGWINCH picks up
+# the new size rather than the one the panel opened at. Falls back to 80 when it cannot be
+# determined (a piped, non-tty invocation, as in the test suite, or no $TERM at all).
+term_width() {
+  # stty size (not tput cols) -- tput queries window size via its OWN stdout, which a bash
+  # command substitution redirects to a pipe, so tput silently falls back to the terminfo
+  # default (80) instead of the pty's real size. stty size reads via its STDIN, which is not
+  # redirected here, so it sees the real window even when captured with $(...).
+  local w
+  w="$("$STTY" size 2>/dev/null | "$AWK" '{print $2}')"
+  case "$w" in
+    ''|*[!0-9]*|0) w=80 ;;
+  esac
+  printf '%s' "$w"
+}
+
+# hr <width> -- a horizontal rule exactly <width> columns wide, so the header visibly reflows.
+hr() {
+  printf '%*s\n' "$1" '' | tr ' ' '-'
+}
+
+# trunc_width <width> -- clip each line of stdin to at most <width> columns, so a panel that was
+# drawn wide and then squeezed narrower does not leave stale-width lines wrapping into each other.
+trunc_width() {
+  "$PY" -c '
+import sys
+w = int(sys.argv[1])
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if len(line) > w:
+        line = line[: max(w - 1, 0)] + "…"
+    print(line)
+' "$1"
+}
 
 # NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so
 # bash collapses runs of it and strips leading/trailing fields — with no file open the
@@ -41,24 +78,32 @@ for d in /opt/homebrew/bin /usr/local/bin; do
   fi
 done
 
-if [ -z "$RG" ]; then
-  echo "ripgrep (rg) not found in /opt/homebrew/bin or /usr/local/bin — install it to use Search."
+pattern=""
+results=""
+if [ -n "$RG" ]; then
+  printf 'Pattern: '
+  IFS= read -r pattern || pattern=""
   echo
-  echo "Press any key to close..."
-  IFS= read -r -n1 -s _ || true
-  exit 0
+  if [ -n "$pattern" ]; then
+    results="$("$RG" --line-number --no-heading --color never --smart-case -- "$pattern" "$repo" 2>/dev/null)"
+  fi
 fi
 
-echo "Search — $repo"
-printf 'Pattern: '
-IFS= read -r pattern || pattern=""
-echo
+render() {
+  # The header names the repo and must NEVER be clipped by width truncation -- a long checkout
+  # path is exactly the case where losing the tail of it matters most. Only the body (the part
+  # truncation actually exists for) goes through trunc_width; the header line is printed straight.
+  local w="$1"
+  echo "Search — $repo"
+  hr "$w"
 
-if [ -z "$pattern" ]; then
-  echo "No pattern entered."
-else
-  "$RG" --line-number --no-heading --color never --smart-case -- "$pattern" "$repo" 2>/dev/null \
-    | "$PY" - <<'EOF'
+  {
+    if [ -z "$RG" ]; then
+      echo "ripgrep (rg) not found in /opt/homebrew/bin or /usr/local/bin — install it to use Search."
+    elif [ -z "$pattern" ]; then
+      echo "No pattern entered."
+    else
+      printf '%s\n' "$results" | "$PY" - <<'EOF'
 import collections, sys
 
 groups = collections.OrderedDict()
@@ -81,8 +126,23 @@ else:
     print()
     print("%d match(es) across %d file(s)" % (total, len(groups)))
 EOF
-fi
+    fi
+  } | trunc_width "$w"
+}
 
-echo
-echo "Press any key to close..."
-IFS= read -r -n1 -s _ || true
+redraw() {
+  local w
+  w="$(term_width)"
+  render "$w"
+  echo
+  echo "Press any key to close..."
+}
+trap redraw WINCH
+redraw
+
+while :; do
+  IFS= read -r -n1 -s _
+  rc=$?
+  [ "$rc" -gt 128 ] && continue
+  break
+done

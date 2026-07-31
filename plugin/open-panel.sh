@@ -50,7 +50,12 @@ trigger="${5:-key}"         # key | auto    (auto = fired from an event, not a k
 swap="${6:-yes}"            # yes = swap after opening so the panel lands left/above
 ratio="${7:-}"              # target fraction of the split for THIS panel; empty = leave herdr's
 useful="${8:-0}"            # columns below which this panel loses its point (0 = no such width)
-herdr_bin="${HERDR_BIN_PATH:-herdr}"
+# @@HERDR@@ is rendered to an absolute path at install time. It was a BARE `herdr` until v0.15.1,
+# which never resolves under launchd's PATH (=/usr/bin:/bin:/usr/sbin:/sbin) -- so `workspace list`
+# below returned nothing, the workspace LABEL could not be resolved to a project, and the editor
+# silently failed to auto-open on a newly created space. HERDR_BIN_PATH stays first so the offline
+# suites can stub it.
+herdr_bin="${HERDR_BIN_PATH:-@@HERDR@@}"
 PY=/usr/bin/python3
 GIT=/usr/bin/git
 

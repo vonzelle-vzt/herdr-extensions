@@ -22,10 +22,49 @@ set -uo pipefail
 
 GIT=/usr/bin/git
 PY=/usr/bin/python3
+STTY=/bin/stty
+AWK=/usr/bin/awk
 herdr_bin="${HERDR_BIN_PATH:-@@HERDR@@}"
 ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
 
 note() { printf 'review: %s\n' "$*" >&2; }
+
+# term_width -- the pane's current column count, re-read on every redraw so a SIGWINCH picks up
+# the new size rather than the one the panel opened at. Falls back to 80 when it cannot be
+# determined (a piped, non-tty invocation, as in the test suite, or no $TERM at all).
+term_width() {
+  # stty size (not tput cols) -- tput queries window size via its OWN stdout, which a bash
+  # command substitution redirects to a pipe, so tput silently falls back to the terminfo
+  # default (80) instead of the pty's real size. stty size reads via its STDIN, which is not
+  # redirected here, so it sees the real window even when captured with $(...).
+  local w
+  w="$("$STTY" size 2>/dev/null | "$AWK" '{print $2}')"
+  case "$w" in
+    ''|*[!0-9]*|0) w=80 ;;
+  esac
+  printf '%s' "$w"
+}
+
+# hr <width> -- a horizontal rule exactly <width> columns wide, so the header visibly reflows.
+hr() {
+  printf '%*s\n' "$1" '' | tr ' ' '-'
+}
+
+# trunc_width <width> -- clip each line of stdin to at most <width> columns. Applied only around
+# the FALLBACK python diff renderer below, never around delta's own output: delta emits real ANSI
+# colour codes, and clipping mid-escape-sequence would corrupt them without any test able to see
+# it (the test suite always stubs delta with plain text).
+trunc_width() {
+  "$PY" -c '
+import sys
+w = int(sys.argv[1])
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if len(line) > w:
+        line = line[: max(w - 1, 0)] + "…"
+    print(line)
+' "$1"
+}
 
 # ---------------------------------------------------------------------------------------------
 # Resolve the repo. Prefer the root SpiceEdit last published for the active file — the pane this
@@ -114,7 +153,7 @@ diff_baseline() {
 # context/added lines, the OLD-file line (marked "-") for removed ones, since a removed line has
 # no home in the new file to cite.
 print_diff() {
-  local base diff_tmp
+  local w="$1" base diff_tmp
   base="$(diff_baseline)"
   echo "Review — $repo"
   if [ "$baseline_mode" = "head" ]; then
@@ -122,6 +161,7 @@ print_diff() {
   else
     echo "baseline: $base (branch merge-base — type b to flip to HEAD-only)"
   fi
+  hr "$w"
   echo
   # `git diff | python3 - <<EOF` would be broken: the heredoc redirection replaces the pipe on
   # python3's stdin entirely, so the diff text would never arrive and the parser would silently
@@ -147,7 +187,7 @@ print_diff() {
     fi
   fi
 
-  "$PY" - "$diff_tmp" <<'EOF'
+  "$PY" - "$diff_tmp" <<'EOF' | trunc_width "$w"
 import re
 import sys
 
@@ -376,17 +416,42 @@ send_notes() {
   fi
 }
 
-print_diff
+# render/redraw give this panel the same SIGWINCH reflow every other panel here has: the diff and
+# legend redraw at the pane's CURRENT width rather than staying pinned to whatever width was live
+# when the panel opened. Unlike the other panels this one never waits for a single keypress -- it
+# stays interactive for notes -- so redraw() has no "Press any key" tail.
+render() {
+  local w="$1"
+  print_diff "$w"
+  echo "Type a note as  path:line comment text"
+  echo "  e  path:line   open that location in the editor and FIX it"
+  echo "  s  send all accumulated notes to the agent pane, then clear them"
+  echo "  p  push this branch and open a DRAFT pull request (notes become the body)"
+  echo "  b  flip the baseline (branch merge-base <-> HEAD) and reprint the diff"
+  echo "  q  quit this panel"
+  echo
+}
 
-echo "Type a note as  path:line comment text"
-echo "  e  path:line   open that location in the editor and FIX it"
-echo "  s  send all accumulated notes to the agent pane, then clear them"
-echo "  p  push this branch and open a DRAFT pull request (notes become the body)"
-echo "  b  flip the baseline (branch merge-base <-> HEAD) and reprint the diff"
-echo "  q  quit this panel"
-echo
+redraw() {
+  render "$(term_width)"
+}
+trap redraw WINCH
+redraw
 
-while IFS= read -r line; do
+# The read loop must distinguish three read outcomes explicitly, the same rule as every other
+# panel's keypress wait here (see libexec/problems etc.): rc=0 is a real line of input, rc=1 is
+# EOF (an empty pipe, exactly how the test harness and any non-interactive run see stdin) and must
+# break rather than spin, and rc>128 is a signal (SIGWINCH) whose trap already redrew -- continue
+# and read again rather than treating the interrupted read as a blank line.
+while :; do
+  IFS= read -r line
+  rc=$?
+  if [ "$rc" -gt 128 ]; then
+    continue
+  fi
+  if [ "$rc" -ne 0 ]; then
+    break
+  fi
   case "$line" in
     q)
       break
@@ -404,7 +469,7 @@ while IFS= read -r line; do
         baseline_mode="head"
       fi
       echo
-      print_diff
+      print_diff "$(term_width)"
       ;;
     e\ *)
       # Reading a diff and being able to FIX it is the whole difference between

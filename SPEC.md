@@ -72,8 +72,23 @@ and **filtering ignored dirs out of the tree** (gitignore-aware, with an off swi
 blame** — author and commit on the cursor's line — is the one still owed, and is still earmarked
 for upstream.
 
-Permanently out of scope, regardless of where it would live: a plugin system, a TOML library, a DAP
-client, Windows support, and patching herdr itself.
+Permanently out of scope, regardless of where it would live: a plugin system, a TOML library,
+Windows support, and patching herdr itself.
+
+**A DAP client was on that list until 2026-07-31 and has been deliberately removed from it.** The
+original reasoning was that writing one is months of work and good terminal DAP clients already
+exist. Two things undercut that. First, the expensive half is already built and proven: herdr-edit's
+`internal/lsp` speaks Content-Length-framed JSON over stdio against nine language servers, and DAP
+uses the *identical* framing — so a DAP client there is a sibling of an existing subsystem, not a
+greenfield one. Second, and decisively: an external TUI cannot set a breakpoint on the line you are
+looking at, and cannot move that breakpoint when you insert a line above it. In-process that costs a
+few dozen lines, because every buffer mutation funnels through five call sites; out-of-process it
+requires the editor to publish every edit. **The editor integration is the feature**, so an external
+client was never the cheap version of this — it was a different, weaker product.
+
+Note what this does *not* change: the client lives in `herdr-edit`, exactly as the first paragraph
+of this section requires. This package's half stays a panel that mirrors the session and writes
+requests to it, and that panel never speaks DAP. If it ever needs to, the split was drawn wrong.
 
 ## Design decisions (each one is a bug this package prevents)
 

@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 
 HOME = os.path.expanduser("~")
 # realpath, NOT abspath. Both documented install paths put a SYMLINK on PATH -- install.sh does
@@ -93,6 +93,183 @@ KEYS = [
     ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
     ("prefix+shift+h", "resize-narrower", "move the split divider left one step"),
 ]
+
+# ---------------------------------------------------------------------------------------------
+# language servers
+#
+# herdr-extensions installs herdr-edit, lazygit, a Nerd Font and prettier -- and historically not
+# one language server, so the editor's headline claim ("language intelligence in a terminal") was
+# dark for anyone whose stack is not Go/Rust/C (the only three that happen to already be on most
+# machines' PATH from other tools). This section closes that gap.
+#
+# herdr-edit's LSP manager (internal/lsp/registry.go, `DefaultServers`) is the SOURCE OF TRUTH for
+# which binaries the editor actually spawns. Restating that table by hand here would rot the first
+# time the editor adds or renames a server -- the same "parse the source of truth, never restate
+# it" rule this package already applies to the geometry constants and the panel list. Most installs
+# are from a released tarball with no herdr-edit checkout on disk, so _FALLBACK_LSP_TABLE below is
+# what actually ships to most users; _registry_lsp_candidates() overrides it whenever a sibling
+# checkout IS reachable (this machine, dogfooding), and tests/check-langservers.sh fails loudly if
+# the fallback and a live checkout ever disagree -- so drift cannot hide behind "nobody who ships a
+# release has a checkout to notice."
+#
+# Only OSI-licensed (MIT) servers: basedpyright, not Pylance -- Pylance's license restricts it to
+# Microsoft products, and this package plus herdr-edit are both MIT.
+#
+# Each row is (server id -- matches registry.go's Name field exactly, so results can be joined by
+# name, marker language this package knows how to detect, install argv). Install commands are ours
+# even when the binary list comes from the registry: registry.go knows how herdr-edit LAUNCHES a
+# server, not how to install one.
+_FALLBACK_LSP_TABLE = [
+    ("typescript", "typescript", ["npm", "i", "-g", "typescript-language-server", "typescript"]),
+    ("python", "python", ["npm", "i", "-g", "basedpyright"]),
+    ("gopls", "go", ["go", "install", "golang.org/x/tools/gopls@latest"]),
+    ("rust-analyzer", "rust", ["rustup", "component", "add", "rust-analyzer"]),
+]
+
+# The sibling-checkout locations this machine (and anyone dogfooding both repos side by side) is
+# expected to have. Neither existing is the normal case for an end user and that is fine --
+# _FALLBACK_LSP_TABLE is what they run on.
+_HERDR_EDIT_CHECKOUTS = (
+    os.path.join(os.path.dirname(REPO), "herdr-edit"),
+    os.path.join(HOME, "github-projects", "herdr-edit"),
+)
+
+
+def _registry_lsp_entries():
+    """Parse `DefaultServers` out of a reachable herdr-edit checkout's registry.go.
+
+    Returns {server name: [candidate binaries, in the order herdr-edit tries them]}, or None when
+    no checkout is found on this machine. Regex-based rather than a real Go parser -- there is no Go
+    AST support in the Python stdlib and this package stays dependency-free on purpose; the same
+    technique already backs the tap/formula consistency checks in tests/check-deps.sh.
+    """
+    for path in _HERDR_EDIT_CHECKOUTS:
+        reg = os.path.join(path, "internal", "lsp", "registry.go")
+        try:
+            src = open(reg).read()
+        except OSError:
+            continue
+        entries = re.findall(
+            r'Name:\s*"([^"]+)",\s*Argv:\s*\[\]\[\]string\{(.*?)\},\s*Languages:',
+            src, re.S)
+        if not entries:
+            continue
+        out = {}
+        for name, argv_block in entries:
+            binaries = []
+            for cand in re.findall(r'\{([^{}]*)\}', argv_block):
+                strs = re.findall(r'"([^"]+)"', cand)
+                if strs:
+                    binaries.append(strs[0])
+            if binaries:
+                out[name] = binaries
+        return out or None
+    return None
+
+
+def lsp_candidates(name):
+    """Every binary herdr-edit will try for server `name`, in try-order.
+
+    Prefers a live herdr-edit checkout's registry.go when one is reachable (the source of truth);
+    falls back to the one binary this package knows how to install when there is none.
+    """
+    live = _registry_lsp_entries()
+    if live and name in live:
+        return live[name]
+    for n, _lang, cmd in _FALLBACK_LSP_TABLE:
+        if n == name and cmd:
+            return [cmd[-1] if cmd[0] not in ("npm", "go", "rustup") else _FALLBACK_BINARY[n]]
+    return []
+
+
+# The binary the registry candidate list would name for `name` when no live registry.go is
+# reachable to say so -- install argv alone does not always spell it out (`go install
+# golang.org/x/tools/gopls@latest` never writes the word "gopls").
+_FALLBACK_BINARY = {
+    "typescript": "typescript-language-server",
+    "python": "basedpyright-langserver",
+    "gopls": "gopls",
+    "rust-analyzer": "rust-analyzer",
+}
+
+_LANG_MARKERS = {
+    "typescript": ("package.json", "tsconfig.json"),
+    "python": ("pyproject.toml", "requirements.txt", "setup.cfg"),
+    "go": ("go.mod",),
+    "rust": ("Cargo.toml",),
+}
+
+
+def detect_languages(projects_root):
+    """Which of this package's known languages have a project directly under projects_root.
+
+    Returns (set-of-languages, could_determine). could_determine is False when projects_root
+    cannot even be listed (missing, unreadable, ...) -- distinct from a real scan finding nothing --
+    so a caller can say "could not determine" rather than implying a clean scan came back empty.
+    Same tri-state discipline as plugin_registered().
+
+    Shallow on purpose: only the immediate children of projects_root are checked for a marker file.
+    projects_root is a workspace of many checkouts, not one project, so walking every subdirectory
+    of every repo would be slow and would trip over vendored dependencies (a stray go.mod under
+    some checkout's node_modules is not evidence the USER writes Go).
+    """
+    try:
+        children = os.listdir(projects_root)
+    except OSError:
+        return set(), False
+    found = set()
+    for name in children:
+        child = os.path.join(projects_root, name)
+        if not os.path.isdir(child):
+            continue
+        for lang, markers in _LANG_MARKERS.items():
+            if lang not in found and any(os.path.isfile(os.path.join(child, m)) for m in markers):
+                found.add(lang)
+    return found, True
+
+
+def install_lang_servers(dry, projects_root):
+    """Install a language server for each language actually found under projects_root.
+
+    Installing all four unconditionally would be rude (a Python server nobody asked for in a pure
+    Go repo); installing none is the bug this closes. Skips anything already resolvable via
+    which() -- including a candidate the LIVE registry knows about that this package's own install
+    command does not target (e.g. vtsls already present covers "typescript" even though we would
+    have installed typescript-language-server).
+    """
+    langs, could_determine = detect_languages(projects_root)
+    if not could_determine:
+        warn("could not scan %s for project languages -- skipping language-server install "
+             "(pass --projects-root, or create the directory)" % projects_root)
+        return
+    if not langs:
+        ok("no known project languages found under %s -- no language servers to install"
+           % projects_root)
+        return
+
+    for name, lang, install_argv in _FALLBACK_LSP_TABLE:
+        if lang not in langs:
+            continue
+        candidates = lsp_candidates(name)
+        if any(which(b) for b in candidates):
+            ok("%s language server already installed (%s)" % (lang, name))
+            continue
+        cmd_str = " ".join(install_argv)
+        if dry:
+            act("would install %s language server (%s): %s" % (lang, name, cmd_str))
+            continue
+        tool = install_argv[0]
+        if not which(tool):
+            warn("%s not found -- install the %s language server manually: %s"
+                 % (tool, lang, cmd_str))
+            continue
+        act("installing %s language server (%s) ..." % (lang, name))
+        rc, out = run(install_argv)
+        if rc == 0 and any(which(b) for b in candidates):
+            ok("%s language server installed (%s)" % (lang, name))
+        else:
+            bad("%s language server install failed:\n%s" % (lang, out.strip()[-400:]))
+
 
 # ---------------------------------------------------------------------------------------------
 # output helpers
@@ -419,8 +596,14 @@ def plugin_registered():
 # ---------------------------------------------------------------------------------------------
 
 
-def render_plugin(dry, projects_root):
+def render_plugin(dry, projects_root, dst=None):
     """Write the plugin manifest + launcher, substituting absolute binary paths.
+
+    dst defaults to PLUGIN_DST. It is a parameter so `herdr-extensions render --dest <tmp>` can
+    produce a real rendered tree for the oracles to inspect WITHOUT touching the user's plugin
+    directory or linking anything into a live herdr server. Oracle 16m depends on this: the only
+    honest way to prove every placeholder is substituted is to render exactly the way install does
+    and then look at the bytes -- a test that re-implements the substitution proves the test works.
 
     The manifest is a template precisely because pane commands must be absolute (launchd PATH) and
     the correct absolute path differs per machine: /opt/homebrew on Apple Silicon, /usr/local on
@@ -440,34 +623,47 @@ def render_plugin(dry, projects_root):
         if not os.path.isfile(f):
             die("package file missing: %s" % f)
 
+    # herdr itself needs an absolute path for the same launchd-PATH reason every other command here
+    # does: a bare `herdr` never resolves in a plugin action or a plugin-launched pane. Resolved ONCE
+    # here rather than at each call site -- two scripts shipped calling a bare `herdr` precisely
+    # because the substitution was applied per-file and each new file had to remember to opt in.
+    herdr_bin = which("herdr") or "herdr"
+    if not which("herdr"):
+        warn("herdr is not on PATH; plugin scripts will be rendered with a bare `herdr`, which "
+             "does NOT resolve under launchd's PATH — panels that shell herdr will do nothing")
+
     manifest = open(src_manifest).read()
     manifest = manifest.replace("@@SPICEEDIT@@", spice).replace("@@LAZYGIT@@", lazy)
-    launcher = open(src_launcher).read().replace("@@PROJECTS_ROOT@@", projects_root)
-    # resize-pane.sh needs herdr itself by absolute path, for the same launchd-PATH reason every
-    # other command here is absolute: a bare `herdr` never resolves in a plugin action.
+    # open-panel.sh shells `herdr workspace list` to resolve a new space's LABEL to a project under
+    # PROJECTS_ROOT. It hardcoded a bare `herdr` until v0.15.1, so that lookup silently returned
+    # nothing under launchd's PATH and the editor never auto-opened on a newly created space.
+    launcher = (open(src_launcher).read()
+                .replace("@@PROJECTS_ROOT@@", projects_root)
+                .replace("@@HERDR@@", herdr_bin))
     src_resize = os.path.join(REPO, "plugin", "resize-pane.sh")
     if not os.path.isfile(src_resize):
         die("package file missing: %s" % src_resize)
-    resizer = open(src_resize).read().replace("@@HERDR@@", which("herdr") or "herdr")
+    resizer = open(src_resize).read().replace("@@HERDR@@", herdr_bin)
     src_img = os.path.join(REPO, "plugin", "image-paste.sh")
     if not os.path.isfile(src_img):
         die("package file missing: %s" % src_img)
-    imgpaste = open(src_img).read().replace("@@HERDR@@", which("herdr") or "herdr")
+    imgpaste = open(src_img).read().replace("@@HERDR@@", herdr_bin)
     # The project opener is a PICKER over PROJECTS_ROOT, not a file-scoped panel, so it lives in
     # plugin/ rather than libexec/ -- everything there is held to the active-file panel contract.
     src_project = os.path.join(REPO, "plugin", "project.sh")
     projectsh = (open(src_project).read()
-                 .replace("@@HERDR@@", which("herdr") or "herdr")
+                 .replace("@@HERDR@@", herdr_bin)
                  .replace("@@GIT@@", which("git") or "/usr/bin/git")
                  .replace("@@FZF@@", which("fzf") or "/nonexistent/fzf")
                  .replace("@@PROJECTS_ROOT@@", projects_root))
 
+    out_dir = dst or PLUGIN_DST
     if dry:
         act("would write %s (spiceedit=%s, lazygit=%s, %d panel scripts)"
-            % (PLUGIN_DST, spice, lazy, len(PANEL_SCRIPTS)))
+            % (out_dir, spice, lazy, len(PANEL_SCRIPTS)))
         return False
 
-    os.makedirs(PLUGIN_DST, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
     changed = False
     files = [("herdr-plugin.toml", manifest, 0o644), ("open-panel.sh", launcher, 0o755),
              ("resize-pane.sh", resizer, 0o755),
@@ -485,20 +681,24 @@ def render_plugin(dry, projects_root):
     # @@SPICEEDIT@@ is substituted into panels as well as the manifest: the Review panel shells the
     # editor with --open-at so a reviewer can jump from a line in the agent's diff to that line in a
     # real editor. Same launchd-PATH reason as CHAFA/CHROME -- a bare binary name never resolves.
+    # @@HERDR@@ belongs here for the same reason and was missing until v0.15.1: libexec/review used
+    # it for `agent prompt`, so the panel's headline feature -- `s`, send these notes to the agent --
+    # shelled the literal string "@@HERDR@@" and did nothing at all, on every installed copy.
     files += [(n, open(p).read()
                .replace("@@CHAFA@@", chafa)
                .replace("@@CHROME@@", chrome)
                .replace("@@SPICEEDIT@@", spice)
+               .replace("@@HERDR@@", herdr_bin)
                .replace("@@DELTA@@", which("delta") or "/nonexistent/delta"), 0o755)
               for n, p in zip(PANEL_SCRIPTS, panel_srcs)]
     for name, body, mode in files:
-        dst = os.path.join(PLUGIN_DST, name)
-        old = open(dst).read() if os.path.isfile(dst) else None
+        path = os.path.join(out_dir, name)
+        old = open(path).read() if os.path.isfile(path) else None
         if old != body:
-            with open(dst, "w") as fh:
+            with open(path, "w") as fh:
                 fh.write(body)
             changed = True
-        os.chmod(dst, mode)
+        os.chmod(path, mode)
     act("plugin files %s" % ("updated" if changed else "already current"))
     return changed
 
@@ -848,7 +1048,7 @@ def reload_config_best_effort():
 # ---------------------------------------------------------------------------------------------
 
 
-def install_deps(dry):
+def install_deps(dry, projects_root):
     brew = which("brew")
     steps = []
     if not editor_bin():
@@ -867,32 +1067,36 @@ def install_deps(dry):
                                     "font-jetbrains-mono-nerd-font"], None))
     if not steps and prettier_available():
         ok("all dependencies present")
-        return
-    if not brew and steps:
+    elif not brew and steps:
         for name, _c, _t in steps:
             warn("%s missing and Homebrew not found — install it manually" % name)
-        return
-    for name, cmd, tap in steps:
-        if dry:
-            act("would install %s" % name)
-            continue
-        act("installing %s ..." % name)
-        if tap:
-            run(tap)
-        rc, out = run(cmd)
-        if which(name.split()[0]) or rc == 0:
-            ok("%s installed" % name)
-        else:
-            bad("%s failed:\n%s" % (name, out.strip()[-400:]))
-    if not prettier_available():
-        if dry:
-            act("would install prettier globally (npm i -g prettier)")
-        elif which("npm"):
-            act("installing prettier ...")
-            run([which("npm"), "i", "-g", "prettier"])
-            ok("prettier installed") if prettier_available() else warn("prettier install failed")
-        else:
-            warn("npm not found — format-on-save will only work in repos that vendor prettier")
+    else:
+        for name, cmd, tap in steps:
+            if dry:
+                act("would install %s" % name)
+                continue
+            act("installing %s ..." % name)
+            if tap:
+                run(tap)
+            rc, out = run(cmd)
+            if which(name.split()[0]) or rc == 0:
+                ok("%s installed" % name)
+            else:
+                bad("%s failed:\n%s" % (name, out.strip()[-400:]))
+        if not prettier_available():
+            if dry:
+                act("would install prettier globally (npm i -g prettier)")
+            elif which("npm"):
+                act("installing prettier ...")
+                run([which("npm"), "i", "-g", "prettier"])
+                ok("prettier installed") if prettier_available() else warn("prettier install failed")
+            else:
+                warn("npm not found — format-on-save will only work in repos that vendor prettier")
+
+    # Independent of the base-tooling early exit above: a repo with no language servers at all is
+    # exactly the bug this closes, so it must run whether or not editor/lazygit/font/prettier needed
+    # anything.
+    install_lang_servers(dry, projects_root)
 
 
 
@@ -954,6 +1158,12 @@ def prettier_available():
 # ---------------------------------------------------------------------------------------------
 
 
+def cmd_render(args):
+    """Render the plugin tree into --dest and stop. A test seam; see the subparser comment."""
+    render_plugin(False, args.projects_root, dst=args.dest)
+    return 0
+
+
 def cmd_install(args):
     head("herdr-extensions install%s" % (" (dry run — nothing will change)" if args.dry_run else ""))
     v = herdr_version()
@@ -990,7 +1200,7 @@ def cmd_install(args):
 
     if not args.no_deps:
         head("Dependencies")
-        install_deps(args.dry_run)
+        install_deps(args.dry_run, args.projects_root)
 
     head("Plugin")
     render_plugin(args.dry_run, args.projects_root)
@@ -1244,6 +1454,34 @@ def cmd_doctor(_args=None):
     else:
         warn("no Nerd Font installed — file-type icons will stay off")
 
+    head("Language intelligence")
+    # A missing server is a recommendation, not a broken install -- warn(), never bad()/fails, so
+    # `doctor` still exits 0 for a machine that simply hasn't run `install` with deps yet, or writes
+    # code in a language this package cannot detect.
+    projects_root = os.path.join(HOME, "github-projects")
+    langs, could_determine = detect_languages(projects_root)
+    if not could_determine:
+        # Absence is not a negative verdict — plugin_registered()'s tri-state precedent. "no servers
+        # needed" would be a claim this scan cannot back up when it could not even list the directory.
+        warn("could not determine which languages you write — %s is missing or unreadable "
+             "(pass a real projects root to `install --projects-root`)" % projects_root)
+    elif not langs:
+        ok("no known project languages found under %s — nothing to recommend" % projects_root)
+    else:
+        for name, lang, install_argv in _FALLBACK_LSP_TABLE:
+            if lang not in langs:
+                continue
+            candidates = lsp_candidates(name)
+            found = next((which(b) for b in candidates if which(b)), None)
+            # Name the SERVER, never the language. "typescript not installed" reads as though the
+            # language itself were missing; what is actually absent is a binary the editor looks
+            # for, and doctor's whole job is to name the specific thing that is wrong.
+            if found:
+                ok("%-10s %s" % (lang, found))
+            else:
+                warn("%-10s no language server found (looked for %s) — %s"
+                     % (lang, ", ".join(candidates), " ".join(install_argv)))
+
     print()
     if fails:
         bad("%d problem(s) found" % fails)
@@ -1307,6 +1545,15 @@ def main():
     p = sub.add_parser("uninstall", help="remove the plugin and managed keybindings")
     p.add_argument("--purge", action="store_true", help="also remove SpiceEdit configs")
     p.set_defaults(fn=cmd_uninstall)
+
+    # Render the plugin tree WITHOUT linking it, reloading herdr, or installing dependencies.
+    # This exists for oracle 16m: proving no @@PLACEHOLDER@@ survives an install requires the real
+    # rendered bytes, and `install` cannot be used for that because it links the result into a live
+    # herdr server. Not documented in README on purpose -- it is a test seam, not a user command.
+    p = sub.add_parser("render", help=argparse.SUPPRESS)
+    p.add_argument("--dest", required=True, help="directory to render the plugin tree into")
+    p.add_argument("--projects-root", default=os.path.join(HOME, "github-projects"))
+    p.set_defaults(fn=cmd_render)
 
     p = sub.add_parser("doctor", help="diagnose the setup")
     p.add_argument("--keymap", action="store_true",

@@ -9,7 +9,44 @@ set -uo pipefail
 
 GIT=/usr/bin/git
 PY=/usr/bin/python3
+STTY=/bin/stty
+AWK=/usr/bin/awk
 ACTIVE_JSON="${XDG_STATE_HOME:-$HOME/.local/state}/spiceedit/active.json"
+
+# term_width -- the pane's current column count, re-read on every redraw so a SIGWINCH picks up
+# the new size rather than the one the panel opened at. Falls back to 80 when it cannot be
+# determined (a piped, non-tty invocation, as in the test suite, or no $TERM at all).
+term_width() {
+  # stty size (not tput cols) -- tput queries window size via its OWN stdout, which a bash
+  # command substitution redirects to a pipe, so tput silently falls back to the terminfo
+  # default (80) instead of the pty's real size. stty size reads via its STDIN, which is not
+  # redirected here, so it sees the real window even when captured with $(...).
+  local w
+  w="$("$STTY" size 2>/dev/null | "$AWK" '{print $2}')"
+  case "$w" in
+    ''|*[!0-9]*|0) w=80 ;;
+  esac
+  printf '%s' "$w"
+}
+
+# hr <width> -- a horizontal rule exactly <width> columns wide, so the header visibly reflows.
+hr() {
+  printf '%*s\n' "$1" '' | tr ' ' '-'
+}
+
+# trunc_width <width> -- clip each line of stdin to at most <width> columns, so a panel that was
+# drawn wide and then squeezed narrower does not leave stale-width lines wrapping into each other.
+trunc_width() {
+  "$PY" -c '
+import sys
+w = int(sys.argv[1])
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if len(line) > w:
+        line = line[: max(w - 1, 0)] + "…"
+    print(line)
+' "$1"
+}
 
 # NOTE the separator is \x1f (unit separator), NOT a tab. Tab counts as IFS WHITESPACE, so
 # bash collapses runs of it and strips leading/trailing fields — with no file open the
@@ -57,10 +94,11 @@ find_abs() {   # find_abs <name>  -- common absolute install locations
   return 1
 }
 
-echo "Tests — $repo"
-echo
-
+# Run the whole test suite ONCE, up front, and capture its output: SIGWINCH should reflow the
+# display at the new width, never re-run vitest/jest/pytest for every resize the user does while
+# reading the results.
 ran=0
+runner_output=""
 
 if [ -f "$repo/package.json" ]; then
   pkg="$(cat "$repo/package.json" 2>/dev/null)"
@@ -72,15 +110,18 @@ if [ -f "$repo/package.json" ]; then
   if [ -n "$runner" ]; then
     bin="$(find_node_bin "$runner" || true)"
     if [ -n "$bin" ]; then
-      echo "== $runner =="
       case "$runner" in
-        vitest) ( cd "$repo" && "$bin" run 2>&1 ) || true ;;
-        jest)   ( cd "$repo" && "$bin" 2>&1 ) || true ;;
+        vitest) out="$( cd "$repo" && "$bin" run 2>&1 )" ;;
+        jest)   out="$( cd "$repo" && "$bin" 2>&1 )" ;;
       esac
+      runner_output="$runner_output== $runner ==
+$out
+"
       ran=1
     else
-      echo "$runner is referenced in package.json but not vendored in node_modules/.bin"
-      echo "(run npm/pnpm/yarn install first)"
+      runner_output="$runner_output$runner is referenced in package.json but not vendored in node_modules/.bin
+(run npm/pnpm/yarn install first)
+"
     fi
   fi
 fi
@@ -91,18 +132,44 @@ if [ -f "$repo/pyproject.toml" ] || [ -f "$repo/pytest.ini" ] || [ -f "$repo/set
     py_bin="$repo/.venv/bin/pytest"
   fi
   if [ -n "$py_bin" ]; then
-    echo "== pytest =="
-    ( cd "$repo" && "$py_bin" -q 2>&1 ) || true
+    out="$( cd "$repo" && "$py_bin" -q 2>&1 )"
+    runner_output="$runner_output== pytest ==
+$out
+"
     ran=1
   else
-    echo "pytest config found but no pytest binary in .venv/bin or the usual absolute locations"
+    runner_output="${runner_output}pytest config found but no pytest binary in .venv/bin or the usual absolute locations
+"
   fi
 fi
 
-if [ "$ran" = "0" ]; then
-  echo "No recognized test runner (vitest/jest/pytest) detected for this repo."
+if [ "$ran" = "0" ] && [ -z "$runner_output" ]; then
+  runner_output="No recognized test runner (vitest/jest/pytest) detected for this repo."
 fi
 
-echo
-echo "Press any key to close..."
-IFS= read -r -n1 -s _ || true
+render() {
+  # The header names the repo and must NEVER be clipped by width truncation -- a long checkout
+  # path is exactly the case where losing the tail of it matters most. Only the body (the part
+  # truncation actually exists for) goes through trunc_width; the header line is printed straight.
+  local w="$1"
+  echo "Tests — $repo"
+  hr "$w"
+  { echo; printf '%s\n' "$runner_output"; } | trunc_width "$w"
+}
+
+redraw() {
+  local w
+  w="$(term_width)"
+  render "$w"
+  echo
+  echo "Press any key to close..."
+}
+trap redraw WINCH
+redraw
+
+while :; do
+  IFS= read -r -n1 -s _
+  rc=$?
+  [ "$rc" -gt 128 ] && continue
+  break
+done

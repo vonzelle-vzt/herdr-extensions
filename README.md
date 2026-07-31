@@ -578,6 +578,28 @@ The editor is the reason this stack is not just a set of shell wrappers. herdr's
 several good file *viewers*; none of them is an editor with language intelligence, so none can tell
 you an identifier does not exist without you running a build.
 
+### Language servers
+
+An editor with LSP support and no language server running is still just a file viewer — no
+diagnostics, no hover, no go-to-definition, no completion, and nothing on screen says why. `install`
+closes that gap: it scans one level into `--projects-root` for marker files (`package.json` /
+`tsconfig.json` → TypeScript, `pyproject.toml` / `requirements.txt` / `setup.cfg` → Python, `go.mod`
+→ Go, `Cargo.toml` → Rust) and installs a server only for the languages you actually have — never
+all of them, never none. Anything already on `PATH` is left alone. Only MIT/OSI-licensed servers are
+installed (`basedpyright`, not Pylance — Pylance's license restricts it to Microsoft products).
+
+The binary names come from `herdr-edit`'s own server table
+(`internal/lsp/registry.go`), not a restatement of it, whenever a sibling checkout of that repo is
+reachable — that table is the one herdr-edit actually launches from, and a second copy here would
+drift the first time it changes. Most installs never have that checkout on disk, so a small
+hardcoded fallback table ships for that case, cross-checked against a live checkout by
+`tests/check-langservers.sh` whenever one is available.
+
+`doctor` reports a **Language intelligence** section per detected language: which server, whether it
+resolves, and the exact command to install it when it does not. A language `install` cannot detect
+(no `--projects-root`, or a directory it cannot read) is reported as "could not determine" — never as
+"no servers needed", which would be a claim the scan cannot back up.
+
 ### Icons
 
 Icons need a Nerd Font **and a terminal configured to use it**. An editor cannot know what font
@@ -637,7 +659,7 @@ driving it across a whole repo from the Search panel is not wired up.
 by other plugins — the marketplace has 18 review tools, 22 notifiers and 17 remote/mobile options.
 This package is the IDE layer and composes with them rather than reimplementing them.
 
-Permanently out of scope: a plugin system, a TOML library, a DAP client, Windows, and patching
+Permanently out of scope: a plugin system, a TOML library, Windows, and patching
 herdr. See [SPEC.md](SPEC.md).
 
 Anything else that needs to live *inside* the editor lives in
