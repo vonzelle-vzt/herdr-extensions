@@ -1,6 +1,6 @@
 # herdr-extensions — PRD
 
-**Status:** shipped, v0.10.0 · **Owner:** vonzelle-vzt · **Last reviewed:** 2026-07-30
+**Status:** shipped, v0.17.1 · **Owner:** vonzelle-vzt · **Last reviewed:** 2026-07-31
 
 [SPEC.md](../SPEC.md) is the engineering authority — every design decision and the bug it prevents.
 This document is the *product* view: who it is for, what problem it solves, what is deliberately out
@@ -54,7 +54,7 @@ navigable are missing precisely where an agent is doing the navigating.**
 
 | Capability | Surface | Notes |
 | --- | --- | --- |
-| Editor panel, project-scoped | `ctrl+b shift+e` | auto-opens per project, left of the agent |
+| Editor panel, project-scoped | `ctrl+b shift+e` | auto-opens per project, left of the agent; herdr-edit surfaces merge conflicts inline (ours/theirs tint, gutter glyphs, live diagnostics on the conflict markers) with a full resolve toolkit in the command palette |
 | Editor in its own tab | `ctrl+b shift+o` | for panes too narrow to split |
 | Source control | `ctrl+b shift+s` | lazygit; interactive staging is the draw |
 | Problems | `ctrl+b shift+m` | `tsc --noEmit`, `eslint`, `ruff` — repo's pinned version wins |
@@ -63,15 +63,17 @@ navigable are missing precisely where an agent is doing the navigating.**
 | Blame + history | `ctrl+b shift+b` | follows the active file |
 | Markdown preview | `ctrl+b shift+v` | glow |
 | Tests | `ctrl+b shift+u` | vitest / jest / pytest, auto-detected |
-| Debug | `ctrl+b d` | parses `.vscode/launch.json` (JSONC), hands to an installed adapter |
+| **Debug** | `ctrl+b d` | mirrors a **live** debug session running inside herdr-edit and drives it; herdr-edit resolves `.vscode/launch.json` (JSONC) through an F5 picker and hands off to delve, debugpy or js-debug (`pwa-chrome` — real browser debugging), never speaks DAP itself |
 | **Live preview** | `ctrl+b shift+a` | headless Chrome screenshot rendered inline, auto-refreshing |
 | **Image / screenshot paste** | `ctrl+b i` | stages a clipboard image, types its path to the agent |
 | **Review the agent's diff** | `ctrl+b shift+k` | cite `path:line`, collect notes, one key sends them all to the agent pane |
+| **Spaces** | `ctrl+b shift+z` | list/focus/rename/close herdr workspaces; panels reflow on `SIGWINCH` |
 | **Runtime diagnostics** | in the Problems panel | console errors + uncaught exceptions from the app Preview is driving, mapped to `file:line` |
 | **AI commit messages** | in `lazygit` | a custom command drafting a subject from the staged diff via the local `claude` CLI |
 | Divider nudge | `ctrl+b shift+l/h` | works around the absence of mouse divider drag |
 | VS Code skin | `herdr-extensions skin` | herdr's own chrome, two variants + reset |
 | Format-on-save resolver | `herdr-fmt` | vendored prettier wins over global, monorepo-safe |
+| Language servers | `install` | scans one level into `--projects-root` and installs a server per language actually found, reported by `doctor` |
 
 ### Not yet — the real gaps
 
@@ -81,17 +83,29 @@ whose whole premise is composing with a pane multiplexer.
 
 | Gap | Who does it today | Standing |
 | --- | --- | --- |
-| **A diff view in the editor** | [file-viewer](https://github.com/smarzban/herdr-file-viewer) (290★) — auto view per file, merge-base ⇄ `HEAD` baseline flip | The Review panel renders a diff; the *editor* still has only gutter markers and a hunk preview. Would upgrade Review from typed `path:line` refs to cursor selection. |
-| **Inline git blame** on the cursor line | GitLens, in a GUI | Editor-side, owed upstream too. Planned. |
-| **A command palette** | [herdr-command-palette](https://github.com/JanTvrdik/herdr-command-palette) | We have a fuzzy *file* finder but no fuzzy *command* search. Planned; the finder and the action tables both already exist. |
-| **LSP autocomplete** | nobody in this marketplace | The largest remaining "tiny VS Code" absence. Transport, UTF-16 conversion and the server registry are all in place. |
-| **Cross-file replace with preview** | — | The editor now has replace and a match-preview API; driving it repo-wide from the Search panel is not wired. |
+| **Cross-file replace with preview** | — | The editor has replace and a match-preview API; driving it repo-wide from the Search panel is not wired. |
+| **Full multi-target `next dev` debugging** | VS Code (compound configurations) | Bounded, not missing: the Debug session is scoped to one active leaf on purpose (`TestSecondStartDebuggingIsRefusedLoudly`) — a second `startDebugging` request (a worker thread, a second `next dev` target) is refused out loud rather than silently dropped or silently replacing the session on screen. A real Next.js `next dev` therefore debugs only its first target. |
+| **debugpy program stdout on Linux** | — | Measured on CI, not assumed: the debugpy session initializes, runs, streams other output events and terminates cleanly on Linux, but the debuggee's own `print()` never arrives as a DAP `output` event — the same configuration works on macOS. The debug console will be missing program output on Linux until upstream debugpy changes. |
+
+**Dropped, not shipped.** A side-by-side diff view in the editor was on this list; it is dropped, not
+built, because the Review panel (a real diff) plus the editor (gutter markers + hunk preview) already
+answer the need with two herdr panes rather than one — see
+[Deliberately out of scope](#deliberately-out-of-scope-permanently). A command palette, an inline
+`git blame` on the cursor line, and LSP autocomplete were also on this list and have since shipped in
+`herdr-edit` — the command palette and autocomplete both have real, non-test call sites in
+`internal/app/app.go`, and inline blame has its own toggle and draw path in `internal/app/blame.go`.
 
 ### Deliberately out of scope, permanently
 
 - **A plugin system** — see principle 1.
-- **A debug adapter client.** The Debug panel finds an installed adapter and hands off. Writing a real
-  DAP client is a quarter of work for a worse result than `koan-debugger`.
+- **An extension marketplace.** Distinct from principle 1's "no plugin system": there is also no
+  registry of third-party additions to install into this package or into `herdr-edit`. A permanent
+  non-goal, not a gap — the marketplace this composes with is herdr's own.
+- **A side-by-side diff view in the editor.** Dropped 2026-07-31, not planned. Two herdr panes already
+  answer it — the Review panel renders a real diff and the editor shows gutter markers plus a hunk
+  preview on the same file — and building a third view duplicates that rather than closing a gap.
+- **Containers / devcontainers.** Dropped, not planned. Out of scope for a package that installs onto
+  the host `PATH` by design; a devcontainer story belongs to herdr itself, not to this installer.
 - **Mouse divider drag.** Not ours to build: herdr 0.7.5 has no divider-drag action at all. Worked
   around with one-keypress nudges (`ctrl+b shift+l/h`).
 - **Windows.** macOS and Linux only.

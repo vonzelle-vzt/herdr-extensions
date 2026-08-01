@@ -15,9 +15,10 @@ Turn [herdr](https://herdr.dev) into a terminal IDE, in one command.
 herdr-extensions install
 ```
 
-That single command installs **everything** — the editor, `lazygit`, a Nerd Font, `prettier` — then
-registers thirteen panels, injects the keybindings, and checks them against herdr's own so nothing of
-yours breaks. There is no second step and no companion package to go and fetch.
+That single command installs **everything** — the editor, `lazygit`, a Nerd Font, `prettier`, language
+servers for what your project actually uses — then registers 15 panels, injects the keybindings, and
+checks them against herdr's own so nothing of yours breaks. There is no second step and no companion
+package to go and fetch.
 
 Inline diagnostics, a real editor panel, source control, search, problems, a debugger, a live
 preview of your app, screenshot paste, and a VS Code skin — wired up, keybound, collision-checked,
@@ -30,7 +31,7 @@ agents in a terminal, with a session that survives a dropped SSH connection. It 
 but no editor, no source-control UI, and no diagnostics.
 
 **herdr-extensions is the IDE half.** It turns a herdr session into something shaped like VS Code —
-file tree and editor on the left, agent on the right, thirteen panels a keypress away — while staying a
+file tree and editor on the left, agent on the right, 15 panels a keypress away — while staying a
 terminal, so the whole thing still works over SSH and survives a disconnect.
 
 ### Who it is for
@@ -83,6 +84,54 @@ One command turns a bare herdr pane into this:
 Editor left, agent right, panels a keypress away — all inside one terminal, so it works over SSH and
 survives a disconnect.
 
+### What it looks like
+
+Five captures of a real running session — not mockups.
+
+<p align="center">
+  <img src="docs/assets/conflict-resolution.png"
+       alt="A real merge conflict in herdr-edit: green tint on the 'ours' body, blue tint on the 'theirs' body, conflict gutter glyphs, live gopls diagnostics inline reading 'expected statement, found &lt;&lt;', and lsp:gopls in the status bar."
+       width="100%">
+</p>
+
+Look at the status bar: `lsp:gopls` is running *while* the file is mid-conflict, and it is already
+flagging the conflict markers as a syntax error.
+
+<p align="center">
+  <img src="docs/assets/conflict-actions.png"
+       alt="The command palette filtered to 'conflict', listing all seven conflict-resolution actions."
+       width="100%">
+</p>
+
+Every conflict action is a command-palette entry, not a hidden keybinding you have to memorize.
+
+<p align="center">
+  <img src="docs/assets/workspace-search.png"
+       alt="Esc F workspace search results shown as a jumpable list, with a header stating the active options and match counts."
+       width="100%">
+</p>
+
+The header states exactly which options are in force and how many matches came back — not just the
+list.
+
+<p align="center">
+  <img src="docs/assets/project-start.png"
+       alt="The editor's start page and file tree, showing a 'U' conflict status marker next to src/payments.go."
+       width="100%">
+</p>
+
+The tree marks a conflicted file with `U` the moment you open the project — before you have opened
+that file at all.
+
+<p align="center">
+  <img src="docs/assets/debug-configurations.png"
+       alt="The command palette filtered to 'debug', showing 'Start debugging  F5', 'Choose debug configuration…' and 'Debug actions  Esc 5'."
+       width="100%">
+</p>
+
+Debugging is reachable the same way as everything else here: type into the palette, don't memorize a
+chord.
+
 ### How it fits together
 
 You install one thing. It brings the rest:
@@ -93,14 +142,15 @@ You install one thing. It brings the rest:
       ┌───────────────────────┼───────────────────────┐
       │                       │                       │
       ▼                       ▼                       ▼
- registers a           installs the            injects 17
+ registers a           installs the            injects 18
  herdr plugin          dependencies            keybindings
- (13 panels)           you don't have          (collision-checked
+ (15 panels)           you don't have          (collision-checked
       │                       │                 against herdr's 39)
-      │                       ├─ herdr-edit ── the editor + LSP
-      │                       ├─ lazygit ───── source control
-      │                       ├─ Nerd Font ─── file icons
-      │                       └─ prettier ──── format on save
+      │                       ├─ herdr-edit ────── the editor + LSP
+      │                       ├─ lazygit ───────── source control
+      │                       ├─ Nerd Font ─────── file icons
+      │                       ├─ prettier ──────── format on save
+      │                       └─ language servers ─ per project (gopls, ts, py, rust, …)
       ▼
  ┌──────────────────────────────────────────────────────────────┐
  │ herdr        workspaces · tabs · panes · session over SSH    │
@@ -119,7 +169,7 @@ Layers, and who owns what:
 | Layer | Owns | Provided by |
 | --- | --- | --- |
 | Session | workspaces, tabs, panes, survives SSH drop | **herdr** (third-party, unpatched) |
-| IDE | 13 panels, layout, keybindings, skin, installer | **this repo** (original work) |
+| IDE | 15 panels, layout, keybindings, skin, installer | **this repo** (original work) |
 | Editing | buffer, rendering, LSP, word wrap, file tree | **herdr-edit** (installed for you) |
 | Tools | git UI, search, typecheck, lint, tests, preview | lazygit, ripgrep, tsc, eslint, ruff, vitest, Chrome |
 
@@ -486,7 +536,7 @@ first-rate terminal editor with no plugin system *by design*. [lazygit](https://
 is the git UI. Gluing the three together correctly takes about ten steps, several of which fail
 **silently** when you get them wrong. This does them right:
 
-- registers a herdr plugin providing the editor, git, and nine more panels
+- registers a herdr plugin providing the editor, git, and 12 more panels
 - renders every pane command to an **absolute path** (the herdr server runs under launchd's minimal
   `PATH`, so a bare `spiceedit` never spawns — and the right absolute path differs on Apple Silicon,
   Intel, and Linux)
