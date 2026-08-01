@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Conflict Guard -- report Herdr agents that can collide by editing the same checkout.
+#
+# Orca avoids agents bumping heads by giving each unit its own git worktree and rejecting
+# overlapping filesInScope before dispatch. This panel brings the visible half of that rule into
+# Herdr: same checkout means danger, separate linked worktrees from the same repo are the safe path.
+set -uo pipefail
+
+PY=/usr/bin/python3
+STTY=/bin/stty
+AWK=/usr/bin/awk
+GIT=/usr/bin/git
+HERDR="${HERDR_BIN_PATH:-@@HERDR@@}"
+
+term_width() {
+  local w
+  w="$("$STTY" size 2>/dev/null | "$AWK" "{print \$2}")"
+  case "$w" in
+    ""|*[!0-9]*|0) w=100 ;;
+  esac
+  printf "%s" "$w"
+}
+
+hr() {
+  printf "%*s\n" "$1" "" | tr " " "-"
+}
+
+panes_json="$("$HERDR" pane list 2>/dev/null || true)"
+
+"$PY" - "$panes_json" "$GIT" "$(term_width)" <<'EOF'
+import json
+import os
+import subprocess
+import sys
+
+raw, git, width_s = sys.argv[1:4]
+try:
+    width = max(60, int(width_s))
+except Exception:
+    width = 100
+
+def line(text=""):
+    if len(text) > width:
+        text = text[: max(width - 1, 0)] + "..."
+    print(text)
+
+def run_git(cwd, args):
+    try:
+        out = subprocess.check_output([git, "-C", cwd, *args], stderr=subprocess.DEVNULL)
+        return out.decode("utf-8", "replace").strip()
+    except Exception:
+        return ""
+
+line("Conflict Guard")
+line("-" * width)
+
+try:
+    panes = json.loads(raw).get("result", {}).get("panes", [])
+except Exception:
+    panes = None
+
+if panes is None:
+    line("could not reach herdr -- pane list failed.")
+    sys.exit(0)
+
+agents = []
+for p in panes:
+    if not p.get("agent"):
+        continue
+    cwd = p.get("foreground_cwd") or p.get("cwd") or ""
+    top = run_git(cwd, ["rev-parse", "--show-toplevel"]) if cwd else ""
+    common = run_git(cwd, ["rev-parse", "--git-common-dir"]) if cwd else ""
+    if common and not os.path.isabs(common):
+        common = os.path.normpath(os.path.join(top or cwd, common))
+    agents.append({
+        "pane": p.get("pane_id") or "",
+        "workspace": p.get("workspace_id") or "",
+        "agent": p.get("agent") or "agent",
+        "status": p.get("agent_status") or "unknown",
+        "cwd": cwd,
+        "top": top,
+        "common": common,
+    })
+
+if not agents:
+    line("no agent panes reported by herdr.")
+    sys.exit(0)
+
+line("Orca rule: one agent per isolated git worktree, with disjoint filesInScope.")
+line("")
+
+by_checkout = {}
+by_repo = {}
+outside = []
+for a in agents:
+    if not a["top"]:
+        outside.append(a)
+        continue
+    by_checkout.setdefault(a["top"], []).append(a)
+    by_repo.setdefault(a["common"] or a["top"], []).append(a)
+
+danger = {k: v for k, v in by_checkout.items() if len(v) > 1}
+isolated = {
+    k: v for k, v in by_repo.items()
+    if len(v) > 1 and len({a["top"] for a in v}) > 1
+}
+
+if danger:
+    line("DANGER: multiple agents share the same checkout.")
+    for top, rows in sorted(danger.items()):
+        line("")
+        line(top)
+        for a in rows:
+            line("  - %s %s %s workspace=%s" % (a["pane"], a["agent"], a["status"], a["workspace"]))
+    line("")
+    line("Fix: move each unit into its own git worktree, or stop all but one agent in that checkout.")
+else:
+    line("No same-checkout agent collisions found.")
+
+if isolated:
+    line("")
+    line("Isolated worktrees from the same repo:")
+    for _common, rows in sorted(isolated.items()):
+        for a in rows:
+            line("  - %s %s %s" % (a["pane"], a["status"], a["top"]))
+
+if outside:
+    line("")
+    line("Agents outside a git repo:")
+    for a in outside:
+        line("  - %s %s %s cwd=%s" % (a["pane"], a["agent"], a["status"], a["cwd"] or "?"))
+
+line("")
+line("For VZT ship runs: run ship-check before dispatch. It rejects overlapping filesInScope.")
+EOF
+
+echo
+echo "close this pane when done."
+if [ "${HERDR_PANEL_NO_WAIT:-}" != "1" ]; then
+  while :; do sleep 3600; done
+fi

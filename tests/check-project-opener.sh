@@ -20,14 +20,25 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 LOG="$TMP/log"
 
-PROJECTS="$TMP/projects"
-mkdir -p "$PROJECTS/alpha-svc/.git" "$PROJECTS/beta-web/.git" "$PROJECTS/plain-dir"
+mkdir -p "$TMP/projects/plain-dir"
+PROJECTS="$(cd "$TMP/projects" && pwd -P)"
+/usr/bin/git init -q "$PROJECTS/alpha-svc"
+/usr/bin/git init -q "$PROJECTS/beta-web"
 
 cat > "$TMP/herdr" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >> "$HERDR_STUB_LOG"
 case "$1 $2" in
   "pane list") printf '%s' "${HERDR_STUB_PANES:-}" ;;
+  "workspace list")
+    printf '{"result":{"workspaces":[{"workspace_id":"wA","label":"%s","number":1}]},"type":"workspace_list"}' "$FZF_PICK"
+    ;;
+  "pane edges")
+    printf '{"result":{"edges":{"layout":{"area":{"height":50,"width":200,"x":0,"y":1},"panes":[{"pane_id":"wA:p2","rect":{"height":50,"width":200,"x":0,"y":1}},{"pane_id":"wA:p9","rect":{"height":50,"width":100,"x":100,"y":1}}],"splits":[{"direction":"right","ratio":0.5,"rect":{"height":50,"width":200,"x":0,"y":1}}]}}},"type":"pane_edges"}'
+    ;;
+  "plugin pane")
+    printf '{"result":{"plugin_pane":{"pane":{"pane_id":"wA:p9"}}},"type":"plugin_pane"}'
+    ;;
 esac
 exit 0
 STUB
@@ -41,6 +52,16 @@ printf '%s\n' "$FZF_PICK"
 exit 0
 STUB
 chmod +x "$TMP/fzf"
+
+OPEN_PANEL="$TMP/open-panel.sh"
+/usr/bin/python3 - "$ROOT/plugin/open-panel.sh" "$OPEN_PANEL" "$TMP/herdr" "$PROJECTS" <<'PYEOF'
+import sys
+src, dst, herdr, projects = sys.argv[1:5]
+open(dst, "w").write(open(src).read()
+    .replace("@@HERDR@@", herdr)
+    .replace("@@PROJECTS_ROOT@@", projects))
+PYEOF
+chmod +x "$OPEN_PANEL"
 
 SCRIPT="$TMP/project.sh"
 /usr/bin/python3 - "$ROOT/plugin/project.sh" "$SCRIPT" "$TMP/herdr" "$TMP/fzf" "$PROJECTS" <<'PYEOF'

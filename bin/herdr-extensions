@@ -54,7 +54,7 @@ SKIN_UI_END = "# <<< herdr-extensions skin (ui) <<<"
 # Panel scripts shipped in libexec/ that get copied alongside open-panel.sh into the rendered
 # plugin directory (see render_plugin()) and wired up as [[panes]] + [[actions]] in the manifest.
 PANEL_SCRIPTS = ["problems", "search", "todo", "blame", "markdown", "tests", "debug", "preview",
-                 "review", "spaces"]
+                 "review", "spaces", "conflicts"]
 
 # Keybindings we inject: (key, action id, human description).
 #
@@ -91,6 +91,7 @@ KEYS = [
     ("prefix+shift+j", "open-project", "Open a project: re-root the editor and this space on a repo"),
     ("prefix+shift+i", "open-images", "Image watcher: new images on Desktop/Downloads go to the agent"),
     ("prefix+shift+k", "open-review", "Review panel: comment on the agent's diff and send it back"),
+    ("prefix+shift+y", "open-conflicts", "Conflict Guard: show agents sharing a checkout"),
     ("prefix+shift+l", "resize-wider", "move the split divider right one step"),
     ("prefix+shift+h", "resize-narrower", "move the split divider left one step"),
     # Right-click is the discoverable way to rename/close a space, and Terminal.app SWALLOWS
@@ -681,8 +682,12 @@ def render_plugin(dry, projects_root, dst=None):
         warn("herdr is not on PATH; plugin scripts will be rendered with a bare `herdr`, which "
              "does NOT resolve under launchd's PATH — panels that shell herdr will do nothing")
 
+    out_dir = dst or PLUGIN_DST
     manifest = open(src_manifest).read()
-    manifest = manifest.replace("@@SPICEEDIT@@", spice).replace("@@LAZYGIT@@", lazy)
+    manifest = (manifest
+                .replace("@@SPICEEDIT@@", spice)
+                .replace("@@LAZYGIT@@", lazy)
+                .replace("@@PLUGIN_DIR@@", out_dir))
     # open-panel.sh shells `herdr workspace list` to resolve a new space's LABEL to a project under
     # PROJECTS_ROOT. It hardcoded a bare `herdr` until v0.15.1, so that lookup silently returned
     # nothing under launchd's PATH and the editor never auto-opened on a newly created space.
@@ -724,7 +729,6 @@ def render_plugin(dry, projects_root, dst=None):
                  .replace("@@FZF@@", which("fzf") or "/nonexistent/fzf")
                  .replace("@@PROJECTS_ROOT@@", projects_root))
 
-    out_dir = dst or PLUGIN_DST
     if dry:
         act("would write %s (spiceedit=%s, lazygit=%s, %d panel scripts)"
             % (out_dir, spice, lazy, len(PANEL_SCRIPTS)))

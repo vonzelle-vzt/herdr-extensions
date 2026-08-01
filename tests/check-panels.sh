@@ -89,41 +89,46 @@ STATE="$(mktemp -d)"
 mkdir -p "$STATE/spiceedit"
 REPO="$(cd "$ROOT" && /usr/bin/git rev-parse --show-toplevel 2>/dev/null || echo "$ROOT")"
 
-# Panels split into two kinds, and conflating them makes this test lie:
+# Panels split into three kinds, and conflating them makes this test lie:
 #   repo-scoped  (search, todo, problems, tests, debug, spaces) work without any file and must name
 #                the repo (spaces does not filter BY repo -- it lists every herdr workspace -- but
 #                it still names the repo it was opened from in its header, and must not misread the
 #                empty-file payload, so it belongs in this bucket rather than a third one)
 #   file-scoped  (blame, markdown) are meaningless without one and must SAY so, not guess
+#   herdr-scoped (conflicts) reads pane/workspace state, not active.json
 REPO_SCOPED="search todo problems tests debug spaces"
 FILE_SCOPED="blame markdown"
+HERDR_SCOPED="conflicts"
 
 # No file open. The payload starts with an empty field — the exact shape that used to shift every
 # value one position left and put the line number into the filename.
 printf '{"file":"","line":1,"col":1,"root":"%s","ts":1}\n' "$REPO" > "$STATE/spiceedit/active.json"
 for p in $PANELS; do
-  out="$(printf '' | XDG_STATE_HOME="$STATE" "$ROOT/libexec/$p" 2>&1 | head -6)"
+  out="$(printf '' | HERDR_PANEL_NO_WAIT=1 XDG_STATE_HOME="$STATE" "$ROOT/libexec/$p" 2>&1 | head -6)"
   # This is the regression itself: a bare number where a path belongs.
   if printf '%s' "$out" | grep -qE 'active: *[0-9]+:'; then
     no "16c: $p misread the empty-file payload (line number landed in the filename)"
     continue
   fi
-  case " $FILE_SCOPED " in
-    *" $p "*)
-      if printf '%s' "$out" | grep -q "No active file"; then
-        ok "16c: $p correctly reports it has no file to work on"
-      else
-        no "16c: $p should say it has no active file"
-      fi
-      ;;
-    *)
-      if printf '%s' "$out" | grep -q "$REPO"; then
-        ok "16c: $p resolved the repo with no file open"
-      else
-        no "16c: $p did not resolve the repo with no file open"
-      fi
-      ;;
-  esac
+  if printf ' %s ' "$FILE_SCOPED" | grep -q " $p "; then
+    if printf '%s' "$out" | grep -q "No active file"; then
+      ok "16c: $p correctly reports it has no file to work on"
+    else
+      no "16c: $p should say it has no active file"
+    fi
+  elif printf ' %s ' "$HERDR_SCOPED" | grep -q " $p "; then
+    if printf '%s' "$out" | grep -q "Conflict Guard"; then
+      ok "16c: $p rendered without treating active.json as its repo input"
+    else
+      no "16c: $p did not render its Herdr-scoped view"
+    fi
+  else
+    if printf '%s' "$out" | grep -q "$REPO"; then
+      ok "16c: $p resolved the repo with no file open"
+    else
+      no "16c: $p did not resolve the repo with no file open"
+    fi
+  fi
 done
 
 # A file IS open. Asserting on the filename appearing in the output is wrong for a renderer like
@@ -143,7 +148,7 @@ done
 # Absent active.json must degrade, not error.
 rm -f "$STATE/spiceedit/active.json"
 for p in $PANELS; do
-  if printf '' | XDG_STATE_HOME="$STATE" "$ROOT/libexec/$p" >/dev/null 2>&1; then
+  if printf '' | HERDR_PANEL_NO_WAIT=1 XDG_STATE_HOME="$STATE" "$ROOT/libexec/$p" >/dev/null 2>&1; then
     ok "16e: $p survives a missing active.json"
   else
     no "16e: $p failed with no active.json"

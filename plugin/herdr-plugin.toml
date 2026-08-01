@@ -65,37 +65,37 @@ command = ["@@LAZYGIT@@"]
 id = "problems"
 title = "Problems"
 placement = "split"
-command = ["bash", "problems"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/problems"]
 
 [[panes]]
 id = "search"
 title = "Search"
 placement = "split"
-command = ["bash", "search"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/search"]
 
 [[panes]]
 id = "todo"
 title = "TODO"
 placement = "split"
-command = ["bash", "todo"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/todo"]
 
 [[panes]]
 id = "debug"
 title = "Debug"
 placement = "split"
-command = ["bash", "debug"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/debug"]
 
 [[panes]]
 id = "blame"
 title = "Blame"
 placement = "split"
-command = ["bash", "blame"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/blame"]
 
 [[panes]]
 id = "markdown"
 title = "Markdown"
 placement = "split"
-command = ["bash", "markdown"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/markdown"]
 
 # The preview pane is TALLER than the other bottom panels (0.55) because it shows an image: a
 # 35%-height strip of a rendered web page is not worth looking at.
@@ -103,13 +103,13 @@ command = ["bash", "markdown"]
 id = "preview"
 title = "Preview"
 placement = "split"
-command = ["bash", "preview"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/preview"]
 
 [[panes]]
 id = "tests"
 title = "Tests"
 placement = "split"
-command = ["bash", "tests"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/tests"]
 
 # Review sends comments on the worktree diff back to the agent in one keystroke, so it is sized
 # like Debug (0.45) rather than the 0.35 the plain output panels get: a diff needs to be read, not
@@ -118,7 +118,7 @@ command = ["bash", "tests"]
 id = "review"
 title = "Review"
 placement = "split"
-command = ["bash", "review"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/review"]
 
 # Spaces lists every herdr workspace and lets you focus/rename/close one -- right-click is the
 # discoverable route to those and it is unreliable on Terminal.app, which swallows Button3, so
@@ -129,7 +129,13 @@ command = ["bash", "review"]
 id = "spaces"
 title = "Spaces"
 placement = "split"
-command = ["bash", "spaces"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/spaces"]
+
+[[panes]]
+id = "conflicts"
+title = "Conflicts"
+placement = "split"
+command = ["/bin/bash", "@@PLUGIN_DIR@@/conflicts"]
 
 # Images watches the folders pictures actually land in and types each new one to the agent. herdr
 # cannot take a Finder drag-and-drop locally -- its own config documents remote_image_paste as
@@ -142,7 +148,7 @@ command = ["bash", "spaces"]
 id = "project"
 title = "Project"
 placement = "split"
-command = ["bash", "project.sh"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/project.sh"]
 
 [[panes]]
 id = "images"
@@ -151,7 +157,7 @@ placement = "split"
 # Straight to the watcher: this is a long-running daemon, not a print-then-wait panel, so it does
 # NOT live in libexec/ -- everything there is held to the active-file panel contract and is expected
 # to terminate, and a watcher that terminates is not a watcher.
-command = ["bash", "image-paste.sh", "--watch"]
+command = ["/bin/bash", "@@PLUGIN_DIR@@/image-paste.sh", "--watch"]
 
 # ---------------------------------------------------------------------------------------------
 # Actions. open-panel.sh args:
@@ -315,6 +321,13 @@ platforms = ["linux", "macos"]
 title = "Spaces panel"
 description = "List every herdr workspace and focus/rename/close one, below the current pane."
 command = ["bash", "open-panel.sh", "spaces", "Spaces", "split", "down", "key", "no", "0.4"]
+
+[[actions]]
+id = "open-conflicts"
+platforms = ["linux", "macos"]
+title = "Conflict Guard"
+description = "Show Herdr agents sharing the same checkout and confirm Orca-style worktree isolation."
+command = ["bash", "open-panel.sh", "conflicts", "Conflicts", "split", "down", "key", "no", "0.4"]
 
 # ---------------------------------------------------------------------------------------------
 # Auto-open the editor for every new workspace/project, so a project always comes up VS-Code-shaped

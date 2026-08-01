@@ -166,7 +166,9 @@ case "${cwd:-}" in
 esac
 
 proj=""
-if [ -n "$cwd" ] && top="$("$GIT" -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+if [ -n "${HERDR_PROJECT_CWD:-}" ] && top="$("$GIT" -C "$HERDR_PROJECT_CWD" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+  proj="$top"                       # explicit project handoff from the Project panel
+elif [ -n "$cwd" ] && top="$("$GIT" -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
   proj="$top"                       # inside a repo -> the repo root
 fi
 

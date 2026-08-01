@@ -102,28 +102,40 @@ case "$unfocused_line" in
 esac
 
 # =================================================================================================
-# (b) closing the panel's OWN space is refused -- before any confirmation, and it never reaches
-#     `workspace close`. This is the single most important assertion in this suite.
+# (b) closing the panel's OWN space is allowed only after confirmation, and only when there is
+#     another space to focus first. With no landing space, it is still refused.
 # =================================================================================================
 run "$(printf 'x 1\nq')"
 if grep -q "workspace close" "$LOG"; then
-  no "b) CLOSED ITS OWN SPACE -- workspace close was called for wA: $(cat "$LOG")"
+  no "b) an unconfirmed own-space close still called workspace close: $(cat "$LOG")"
 else
-  ok "b) refused to close its own space -- workspace close was never called"
+  ok "b) an unconfirmed own-space close never reaches workspace close"
 fi
-if grep -qi "refus" "$TMP/out"; then
-  ok "b) the refusal is stated in the panel output"
+if grep -qi "focus moves to" "$TMP/out"; then
+  ok "b) own-space close explains the focus handoff"
 else
-  no "b) no refusal message found -- output: $(cat "$TMP/out")"
+  no "b) no focus-handoff message found -- output: $(cat "$TMP/out")"
 fi
-# The refusal must fire without ever prompting for or accepting a confirmation line -- feeding what
-# WOULD be a valid confirmation for space 2 right after "x 1" must not be swallowed as if it were
-# read as that confirmation and then acted on for space 1.
 run "$(printf 'x 1\nCLOSE Alpha\nq')"
-if grep -q "workspace close" "$LOG"; then
-  no "b) closing its own space with a matching confirmation line still closed it: $(cat "$LOG")"
+if grep -q "workspace focus wB" "$LOG" && grep -q "workspace close wA" "$LOG"; then
+  ok "b) a confirmed own-space close focuses another space before closing"
 else
-  ok "b) even a matching confirmation line cannot close the panel's own space"
+  no "b) confirmed own-space close did not focus another space then close -- log: $(cat "$LOG")"
+fi
+
+WS_ONLY='{"result":{"workspaces":[
+  {"workspace_id":"wA","label":"Alpha","number":1,"pane_count":2,"tab_count":1,"agent_status":"idle","focused":true}
+]}}'
+run "$(printf 'x 1\nCLOSE Alpha\nq')" "$WS_ONLY"
+if grep -q "workspace close" "$LOG"; then
+  no "b) closing the only space still called workspace close: $(cat "$LOG")"
+else
+  ok "b) closing the only open space is refused"
+fi
+if grep -qi "only open space" "$TMP/out"; then
+  ok "b) the only-space refusal is stated in the panel output"
+else
+  no "b) no only-space refusal message found -- output: $(cat "$TMP/out")"
 fi
 
 # =================================================================================================

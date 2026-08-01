@@ -22,6 +22,7 @@ GIT="@@GIT@@"
 FZF="@@FZF@@"
 PROJECTS_ROOT="@@PROJECTS_ROOT@@"
 PY=/usr/bin/python3
+DIRNAME=/usr/bin/dirname
 
 die() { printf 'project: %s\n' "$*"; echo; echo "Press any key to close..."; IFS= read -r -n1 -s _ || true; exit 1; }
 
@@ -100,20 +101,46 @@ for p in panes:
 " "$HERDR" "$ws" 2>/dev/null
 fi
 
-# Re-root the editor. --cwd is the whole point: it is what makes the tree show THIS project.
-if [ -n "$ws" ]; then
-  "$HERDR" plugin pane open --plugin herdr-extensions --entrypoint editor \
-    --placement split --direction right --workspace "$ws" --cwd "$proj" >/dev/null 2>&1
-else
-  "$HERDR" plugin pane open --plugin herdr-extensions --entrypoint editor \
-    --placement split --direction right --cwd "$proj" >/dev/null 2>&1
-fi
-
 # Rename the space after the repo, so the auto-open matcher resolves it unaided next time. This is
 # what stops you needing this panel twice for the same space.
 if [ -n "$ws" ]; then
   "$HERDR" workspace rename "$ws" "$choice" >/dev/null 2>&1
 fi
+
+target_pane=""
+if [ -n "$ws" ]; then
+  target_pane="$("$HERDR" pane list 2>/dev/null | "$PY" -c "
+import sys, json
+ws = sys.argv[1]
+try:
+    panes = json.load(sys.stdin)['result']['panes']
+except Exception:
+    panes = []
+same_ws = [p for p in panes if p.get('workspace_id') == ws]
+agent = next((p for p in same_ws if p.get('agent')), None)
+focused = next((p for p in same_ws if p.get('focused')), None)
+pick = agent or focused or (same_ws[0] if same_ws else {})
+print(pick.get('pane_id', ''))
+" "$ws" 2>/dev/null)"
+fi
+
+ctx="$("$PY" - "$ws" "$target_pane" "$proj" <<'EOF'
+import json, sys
+ws, pane, proj = sys.argv[1:4]
+d = {"focused_pane_cwd": proj, "workspace_cwd": proj}
+if ws:
+    d["workspace_id"] = ws
+if pane:
+    d["focused_pane_id"] = pane
+print(json.dumps(d, separators=(",", ":")))
+EOF
+)"
+
+# Re-root the editor through the same launcher as the normal editor action. That keeps the selected
+# project cwd, VS-Code-left swap and explorer-visible width policy in one place.
+plugin_dir="$(cd "$("$DIRNAME" "$0")" && pwd)"
+HERDR_BIN_PATH="$HERDR" HERDR_PANE_ID="$target_pane" HERDR_PLUGIN_CONTEXT_JSON="$ctx" HERDR_PROJECT_CWD="$proj" \
+  /bin/bash "$plugin_dir/open-panel.sh" editor Edit split right key yes 88 70 >/dev/null 2>&1
 
 echo "opened $choice"
 echo "  editor re-rooted at $proj"
