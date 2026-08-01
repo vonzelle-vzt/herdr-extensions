@@ -191,7 +191,7 @@ herdr feel like an IDE. Star counts and features checked 2026-07-30.
 | **Typecheck / lint problems** | ✗ | ✗ | ✗ | ✗ | ✓ tsc · eslint · ruff |
 | **Runtime errors from the running app** | ✗ | ✗ | ✗ | console only | ✓ into the Problems panel |
 | **Run tests** | ✗ | ✗ | ✗ | ✗ | ✓ vitest · jest · pytest |
-| **Debugger** | ✗ | ✗ | ✗ | ✗ | ✓ live session + `launch.json` |
+| **Debugger** | ✗ | ✗ | ✗ | ✗ | ✓ live session, `launch.json`, Go · Python · Node · browser |
 | **Live preview of your app** | ✗ | ✗ | ✗ | ✓ full Chromium/CDP | ✓ screenshot, auto-refresh |
 | Markdown preview | ✓ | ✓ | ✗ | — | ✓ |
 | **Paste a screenshot to the agent** | ✗ | ✗ | ✗ | ✗ | ✓ |
