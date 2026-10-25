@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  offline-oracles:
+    # macOS on purpose: the panels target /bin/bash 3.2 and the system python3, and
+    # tests/check-panels.sh 16b guards the bash-3.2 parse failure that only reproduces there.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check the CLI and scripts
+        run: |
+          /usr/bin/python3 -m py_compile bin/herdr-extensions
+          for f in plugin/*.sh libexec/* tests/*.sh install.sh; do
+            case "$(head -1 "$f")" in *bash*) /bin/bash -n "$f" ;; esac
+          done
+
+      # tests/live-check.sh needs a running herdr session, so it stays a local release gate.
+      # check-reflow.sh is also excluded: it drives panels through a synthetic pty and is
+      # environment-sensitive (it fails on a developer machine as well), so it is not a CI signal.
+      - name: Offline oracles
+        run: |
+          status=0
+          for suite in tests/check-*.sh; do
+            case "$suite" in */check-reflow.sh) continue ;; esac
+            echo "::group::$suite"
+            /bin/bash "$suite" || { echo "::error::$suite failed"; status=1; }
+            echo "::endgroup::"
+          done
+          /usr/bin/python3 tests/check-sizing.py || status=1
+          exit $status
